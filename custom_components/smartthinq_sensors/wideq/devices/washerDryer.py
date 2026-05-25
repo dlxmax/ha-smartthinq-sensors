@@ -767,6 +767,9 @@ class WMDevice(Device):
         tcl_count = None
         if self._status:
             tcl_count = self._status.tubclean_count
+            if tcl_count == "N/A":
+                # Never carry the placeholder forward: it would stick permanently.
+                tcl_count = None
         self._status = WMStatus(self, tcl_count=tcl_count)
         return self._status
 
@@ -1176,7 +1179,13 @@ class WMStatus(DeviceStatus):
                 return None
             result = self._data.get(key)
             if result is None:
-                result = self._tcl_count or "N/A"
+                # Keep reporting the last known count while the machine is powered
+                # off, instead of dropping to the "N/A" placeholder.
+                result = self._tcl_count
+            elif self.int_or_none(result) is not None:
+                self._tcl_count = result
+            if result is None:
+                result = "N/A"
         return self._update_feature(WashDeviceFeatures.TUBCLEAN_COUNT, result, False)
 
     @property

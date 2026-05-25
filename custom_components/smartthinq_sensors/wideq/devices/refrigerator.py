@@ -650,16 +650,39 @@ class RefrigeratorStatus(DeviceStatus):
         state = self.lookup_enum("LockingStatus")
         if not state:
             return StateOptions.NONE
-        return self._device.get_enum_text(state)
+        return self._update_feature(
+            RefrigeratorFeatures.LOCKINGSTATUS,
+            self._device.get_enum_text(state),
+            False,
+        )
 
     @property
     def active_saving_status(self):
         """Return current active saving status."""
-        return self._data.get("ActiveSavingStatus", "N/A")
+        if (status := self._data.get("ActiveSavingStatus")) is None:
+            return None
+        return self._update_feature(
+            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False
+        )
+
+    @property
+    def smart_saving_mode_status(self):
+        """Return whether smart saving is currently active."""
+        key = "smartSavingModeStatus" if self.is_info_v2 else "SmartSavingModeStatus"
+        if not (status := self.lookup_enum(key)):
+            return None
+        return self._update_feature(
+            RefrigeratorFeatures.SMARTSAVINGMODESTATUS,
+            self._device.get_enum_text(status),
+            False,
+        )
 
     def _update_features(self):
         _ = [
             self.eco_friendly_state,
+            self.locked_state,
+            self.active_saving_status,
+            self.smart_saving_mode_status,
             self.ice_plus_status,
             self.express_fridge_status,
             self.express_mode_status,

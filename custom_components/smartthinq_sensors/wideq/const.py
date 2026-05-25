@@ -39,6 +39,12 @@ class AirConditionerFeatures(StrEnum):
     FILTER_MAIN_USE = "filter_main_use"
     LIGHTING_DISPLAY = "lighting_display"
     MODE_AIRCLEAN = "mode_airclean"
+    MODE_POWER_SAVE = "mode_power_save"
+    MODE_POWER_SAVE_DRY = "mode_power_save_dry"
+    MODE_ICE_VALLEY = "mode_ice_valley"
+    MODE_AUTO_DRY = "mode_auto_dry"
+    MODE_FEEDBACK_SOUND = "mode_feedback_sound"
+    DIAGNOSIS = "diagnosis"
     MODE_AWHP_SILENT = "mode_awhp_silent"
     MODE_JET = "mode_jet"
     PM1 = "pm1"
@@ -101,7 +107,10 @@ class RangeFeatures(StrEnum):
 class RefrigeratorFeatures(StrEnum):
     """Features for LG Refrigerator devices."""
 
+    ACTIVESAVINGSTATUS = "active_saving_status"
     ECOFRIENDLY = "eco_friendly"
+    LOCKINGSTATUS = "locking_status"
+    SMARTSAVINGMODESTATUS = "smart_saving_mode_status"
     EXPRESSMODE = "express_mode"
     EXPRESSFRIDGE = "express_fridge"
     FRESHAIRFILTER = "fresh_air_filter"

@@ -35,6 +35,12 @@ SUPPORT_VANE_VSWING = [SUPPORT_RAC_SUBMODE, "@AC_MAIN_WIND_DIRECTION_SWING_UP_DO
 SUPPORT_JET_COOL = [SUPPORT_RAC_SUBMODE, "@AC_MAIN_WIND_MODE_COOL_JET_W"]
 SUPPORT_JET_HEAT = [SUPPORT_RAC_SUBMODE, "@AC_MAIN_WIND_MODE_HEAT_JET_W"]
 SUPPORT_AIRCLEAN = [SUPPORT_RAC_MODE, "@AIRCLEAN"]
+SUPPORT_POWER_SAVE = [SUPPORT_PAC_MODE, "@ENERGYSAVING"]
+SUPPORT_POWER_SAVE_RAC = [SUPPORT_RAC_MODE, "@ENERGYSAVING"]
+SUPPORT_WIND_MODE = ["SupportWindMode", "support.windMode"]
+SUPPORT_POWER_SAVE_DRY = [SUPPORT_PAC_MODE, "@ENERGYSAVINGDRY"]
+SUPPORT_AUTO_DRY = [SUPPORT_PAC_MODE, "@AUTODRY"]
+SUPPORT_ICE_VALLEY = [SUPPORT_WIND_MODE, "@AC_MAIN_WIND_MODE_ICEVALLEY_W"]
 SUPPORT_HOT_WATER = [SUPPORT_PAC_MODE, ["@HOTWATER", "@HOTWATER_ONLY"]]
 SUPPORT_LIGHT_SWITCH = [SUPPORT_LIGHT, "@RAC_88_DISPLAY_CONTROL"]
 SUPPORT_LIGHT_INV_SWITCH = [SUPPORT_LIGHT, "@BRIGHTNESS_CONTROL"]
@@ -72,6 +78,12 @@ STATE_DUCT_ZONE = ["ZoneControl", "airState.ductZone.state"]
 STATE_POWER = [STATE_POWER_V1, "airState.energy.onCurrent"]
 STATE_HUMIDITY = ["SensorHumidity", "airState.humidity.current"]
 STATE_MODE_AIRCLEAN = ["AirClean", "airState.wMode.airClean"]
+STATE_MODE_POWER_SAVE = ["PowerSave", "airState.powerSave.basic"]
+STATE_MODE_POWER_SAVE_DRY = ["PowerSaveDry", "airState.powerSave.dry"]
+STATE_MODE_ICE_VALLEY = ["IceValley", "airState.wMode.iceValley"]
+STATE_MODE_AUTO_DRY = ["AutoDry", "airState.miscFuncState.autoDry"]
+STATE_MODE_FEEDBACK_SOUND = ["FeedbackSound", "airState.miscFuncState.feedbackSound"]
+STATE_DIAG_CODE = ["DiagCode", "airState.diagCode"]
 STATE_MODE_JET = ["Jet", "airState.wMode.jet"]
 STATE_LIGHTING_DISPLAY = ["DisplayControl", "airState.lightingState.displayControl"]
 STATE_AIRSENSORMON = ["SensorMon", "airState.quality.sensorMon"]
@@ -103,6 +115,11 @@ CMD_STATE_WDIR_HSWING = [CTRL_WIND_DIRECTION, "Set", STATE_WDIR_HSWING]
 CMD_STATE_WDIR_VSWING = [CTRL_WIND_DIRECTION, "Set", STATE_WDIR_VSWING]
 CMD_STATE_DUCT_ZONES = [CTRL_MISC, "Set", [DUCT_ZONE_V1, "airState.ductZone.control"]]
 CMD_STATE_MODE_AIRCLEAN = [CTRL_BASIC, "Set", STATE_MODE_AIRCLEAN]
+CMD_STATE_MODE_POWER_SAVE = [CTRL_BASIC, "Set", STATE_MODE_POWER_SAVE]
+CMD_STATE_MODE_POWER_SAVE_DRY = [CTRL_BASIC, "Set", STATE_MODE_POWER_SAVE_DRY]
+CMD_STATE_MODE_ICE_VALLEY = [CTRL_BASIC, "Set", STATE_MODE_ICE_VALLEY]
+CMD_STATE_MODE_AUTO_DRY = [CTRL_BASIC, "Set", STATE_MODE_AUTO_DRY]
+CMD_STATE_MODE_FEEDBACK_SOUND = [CTRL_BASIC, "Set", STATE_MODE_FEEDBACK_SOUND]
 CMD_STATE_MODE_JET = [CTRL_BASIC, "Set", STATE_MODE_JET]
 CMD_STATE_LIGHTING_DISPLAY = [CTRL_BASIC, "Set", STATE_LIGHTING_DISPLAY]
 CMD_RESERVATION_SLEEP_TIME = [CTRL_BASIC, "Set", STATE_RESERVATION_SLEEP_TIME]
@@ -141,10 +158,10 @@ TEMP_STEP_HALF = 0.5
 
 ADD_FEAT_POLL_INTERVAL = 300  # 5 minutes
 
-LIGHT_DISPLAY_OFF = ["@RAC_LED_OFF", "@AC_LED_OFF_W"]
-LIGHT_DISPLAY_ON = ["@RAC_LED_ON", "@AC_LED_ON_W"]
-LIGHT_DISPLAY_INV_OFF = ["@RAC_LED_ON", "@AC_LED_OFF_W"]
-LIGHT_DISPLAY_INV_ON = ["@RAC_LED_OFF", "@AC_LED_ON_W"]
+LIGHT_DISPLAY_OFF = ["@RAC_LED_OFF", "@AC_LED_OFF_W", "@OFF"]
+LIGHT_DISPLAY_ON = ["@RAC_LED_ON", "@AC_LED_ON_W", "@ON"]
+LIGHT_DISPLAY_INV_OFF = ["@RAC_LED_ON", "@AC_LED_OFF_W", "@ON"]
+LIGHT_DISPLAY_INV_ON = ["@RAC_LED_OFF", "@AC_LED_ON_W", "@OFF"]
 
 MODE_OFF = "@OFF"
 MODE_ON = "@ON"
@@ -590,6 +607,29 @@ class AirConditionerDevice(Device):
         return self._is_mode_supported(SUPPORT_AIRCLEAN)
 
     @cached_property
+    def is_mode_power_save_supported(self):
+        """Return if PowerSave (energy saving) mode is supported."""
+        return bool(
+            self._is_mode_supported(SUPPORT_POWER_SAVE)
+            or self._is_mode_supported(SUPPORT_POWER_SAVE_RAC)
+        )
+
+    @cached_property
+    def is_mode_power_save_dry_supported(self):
+        """Return if PowerSaveDry mode is supported."""
+        return bool(self._is_mode_supported(SUPPORT_POWER_SAVE_DRY))
+
+    @cached_property
+    def is_mode_ice_valley_supported(self):
+        """Return if IceValley (ice cool power) mode is supported."""
+        return bool(self._is_mode_supported(SUPPORT_ICE_VALLEY))
+
+    @cached_property
+    def is_mode_auto_dry_supported(self):
+        """Return if AutoDry mode is supported."""
+        return bool(self._is_mode_supported(SUPPORT_AUTO_DRY))
+
+    @cached_property
     def supported_ligth_modes(self):
         """Return light switch modes supported."""
         if self._is_mode_supported(SUPPORT_LIGHT_SWITCH):
@@ -750,6 +790,47 @@ class AirConditionerDevice(Device):
         mode = self.model_info.enum_value(keys[2], mode_key)
         await self.set(keys[0], keys[1], key=keys[2], value=mode)
 
+    async def _set_simple_mode(self, cmd_keys, status: bool):
+        """Set a plain @OFF/@ON mode on or off."""
+        keys = self._get_cmd_keys(cmd_keys)
+        mode_key = MODE_ON if status else MODE_OFF
+        mode = self.model_info.enum_value(keys[2], mode_key)
+        await self.set(keys[0], keys[1], key=keys[2], value=mode)
+
+    async def set_mode_power_save(self, status: bool):
+        """Set the PowerSave (energy saving) mode on or off."""
+        if not self.is_mode_power_save_supported:
+            raise ValueError("PowerSave mode not supported")
+        await self._set_simple_mode(CMD_STATE_MODE_POWER_SAVE, status)
+
+    async def set_mode_power_save_dry(self, status: bool):
+        """Set the PowerSaveDry mode on or off."""
+        if not self.is_mode_power_save_dry_supported:
+            raise ValueError("PowerSaveDry mode not supported")
+        await self._set_simple_mode(CMD_STATE_MODE_POWER_SAVE_DRY, status)
+
+    async def set_mode_ice_valley(self, status: bool):
+        """Set the IceValley mode on or off."""
+        if not self.is_mode_ice_valley_supported:
+            raise ValueError("IceValley mode not supported")
+        await self._set_simple_mode(CMD_STATE_MODE_ICE_VALLEY, status)
+
+    async def set_mode_auto_dry(self, status: bool):
+        """Set the AutoDry mode on or off."""
+        if not self.is_mode_auto_dry_supported:
+            raise ValueError("AutoDry mode not supported")
+        await self._set_simple_mode(CMD_STATE_MODE_AUTO_DRY, status)
+
+    async def set_mode_feedback_sound(self, status: bool):
+        """Set the feedback sound (button beep) on or off.
+
+        There is no SetFeedbackSound action in ControlWifi, but THINQ1 control
+        commands are sent as a plain {key: value} pair, so the write is still
+        attempted; FeedbackSound is in the Monitoring protocol so the next poll
+        shows whether the unit honoured it.
+        """
+        await self._set_simple_mode(CMD_STATE_MODE_FEEDBACK_SOUND, status)
+
     async def set_mode_jet(self, status: bool):
         """Set the Jet mode on or off."""
         if self.supported_mode_jet == JetModeSupport.NONE:
@@ -781,6 +862,14 @@ class AirConditionerDevice(Device):
         if lighting is None:
             raise ValueError("Not possible to determinate a valid light mode")
         await self.set(keys[0], keys[1], key=keys[2], value=lighting)
+        # Some units accept SetDisplayControl but never report DisplayControl back,
+        # so remember what we asked for and reflect it straight away: features are
+        # only recomputed once per status object, i.e. once per poll interval.
+        self.assumed_lighting_display = status
+        if self._status is not None:
+            self._status.device_features[
+                AirConditionerFeatures.LIGHTING_DISPLAY
+            ] = status
 
     async def set_mode_awhp_silent(self, value: bool):
         """Set the AWHP silent mode on or off."""
@@ -1188,6 +1277,79 @@ class AirConditionerStatus(DeviceStatus):
         status = value == MODE_AIRCLEAN_ON
         return self._update_feature(AirConditionerFeatures.MODE_AIRCLEAN, status, False)
 
+    def _simple_mode_status(self, supported, state_key, feature):
+        """Return status for a plain @OFF/@ON mode, or None if not reported."""
+        if not supported:
+            return None
+        key = self._get_state_key(state_key)
+        if (value := self.lookup_enum(key, True)) is None:
+            return None
+        return self._update_feature(feature, value == MODE_ON, False)
+
+    @property
+    def mode_power_save(self):
+        """Return PowerSave (energy saving) mode status."""
+        return self._simple_mode_status(
+            self._device.is_mode_power_save_supported,
+            STATE_MODE_POWER_SAVE,
+            AirConditionerFeatures.MODE_POWER_SAVE,
+        )
+
+    @property
+    def mode_power_save_dry(self):
+        """Return PowerSaveDry mode status."""
+        return self._simple_mode_status(
+            self._device.is_mode_power_save_dry_supported,
+            STATE_MODE_POWER_SAVE_DRY,
+            AirConditionerFeatures.MODE_POWER_SAVE_DRY,
+        )
+
+    @property
+    def mode_ice_valley(self):
+        """Return IceValley mode status."""
+        return self._simple_mode_status(
+            self._device.is_mode_ice_valley_supported,
+            STATE_MODE_ICE_VALLEY,
+            AirConditionerFeatures.MODE_ICE_VALLEY,
+        )
+
+    @property
+    def mode_auto_dry(self):
+        """Return AutoDry mode status."""
+        return self._simple_mode_status(
+            self._device.is_mode_auto_dry_supported,
+            STATE_MODE_AUTO_DRY,
+            AirConditionerFeatures.MODE_AUTO_DRY,
+        )
+
+    @property
+    def mode_feedback_sound(self):
+        """Return feedback sound (button beep) status."""
+        return self._simple_mode_status(
+            True,
+            STATE_MODE_FEEDBACK_SOUND,
+            AirConditionerFeatures.MODE_FEEDBACK_SOUND,
+        )
+
+    @property
+    def diagnosis(self):
+        """Return the smart-diagnosis result reported over the network."""
+        key = self._get_state_key(STATE_DIAG_CODE)
+        if (value := self.lookup_enum(key, True)) is None:
+            return None
+        if not value:
+            status = "no_data"
+        elif value.endswith("_NORMAL_S"):
+            status = "normal"
+        else:
+            status = (
+                value.replace("@AC_SMART_DIAGNOSIS_RESULT_", "")
+                .rstrip("S")
+                .rstrip("_")
+                .lower()
+            ) or "no_data"
+        return self._update_feature(AirConditionerFeatures.DIAGNOSIS, status, False)
+
     @property
     def mode_jet(self):
         """Return Jet Mode status."""
@@ -1208,8 +1370,13 @@ class AirConditionerStatus(DeviceStatus):
         if not (supp_modes := self._device.supported_ligth_modes):
             return None
         key = self._get_state_key(STATE_LIGHTING_DISPLAY)
-        if (value := self.lookup_enum(key, True)) is None:
-            return None
+        if not (value := self.lookup_enum(key, True)):
+            # Write-only on some units: fall back to the last commanded value.
+            return self._update_feature(
+                AirConditionerFeatures.LIGHTING_DISPLAY,
+                getattr(self._device, "assumed_lighting_display", False),
+                False,
+            )
         return self._update_feature(
             AirConditionerFeatures.LIGHTING_DISPLAY, value in supp_modes[MODE_ON], False
         )
@@ -1397,6 +1564,12 @@ class AirConditionerStatus(DeviceStatus):
             self.pm25,
             self.pm1,
             self.mode_airclean,
+            self.mode_power_save,
+            self.mode_power_save_dry,
+            self.mode_ice_valley,
+            self.mode_auto_dry,
+            self.mode_feedback_sound,
+            self.diagnosis,
             self.mode_jet,
             self.lighting_display,
             self.water_in_current_temp,

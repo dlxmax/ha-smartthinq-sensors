@@ -18,6 +18,7 @@ from homeassistant.components.climate.const import (
     FAN_HIGH,
     FAN_LOW,
     FAN_MEDIUM,
+    PRESET_BOOST,
     PRESET_ECO,
     PRESET_NONE,
     ClimateEntityFeature,
@@ -322,6 +323,17 @@ class LGEACClimate(LGEClimate):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode."""
+        if extra := self._extra_presets:
+            if preset_mode != PRESET_NONE and preset_mode not in extra:
+                raise ValueError(f"Invalid preset_mode [{preset_mode}]")
+            if not self._api.state.is_on and preset_mode != PRESET_NONE:
+                await self._device.power(True)
+            # Only one synthesised preset may be active at a time.
+            for name, (_feature, setter) in extra.items():
+                await setter(name == preset_mode)
+            self._api.async_set_updated()
+            return
+
         if not (modes := self._available_preset_modes()):
             raise NotImplementedError()
 
@@ -342,10 +354,45 @@ class LGEACClimate(LGEClimate):
         self._api.async_set_updated()
 
     @property
+    def _extra_presets(self) -> dict:
+        """Presets synthesised from standalone toggles rather than op modes.
+
+        Maps preset name -> (feature key, setter coroutine). Only used when the
+        device exposes no op-mode based presets.
+        """
+        if self._available_preset_modes():
+            return {}
+        presets = {}
+        if getattr(self._device, "is_mode_power_save_supported", False):
+            presets[PRESET_ECO] = (
+                AirConditionerFeatures.MODE_POWER_SAVE,
+                self._device.set_mode_power_save,
+            )
+        if getattr(self._device, "is_mode_ice_valley_supported", False):
+            presets[PRESET_BOOST] = (
+                AirConditionerFeatures.MODE_ICE_VALLEY,
+                self._device.set_mode_ice_valley,
+            )
+        return presets
+
+    @property
+    def preset_mode(self) -> str | None:
+        """Return the current preset mode."""
+        if extra := self._extra_presets:
+            features = self._api.state.device_features
+            for name, (feature, _setter) in extra.items():
+                if features.get(feature):
+                    return name
+            return PRESET_NONE
+        return self._attr_preset_mode
+
+    @property
     def preset_modes(self) -> list[str] | None:
         """Return the list of available preset modes."""
         modes = self._available_preset_modes()
         if not modes:
+            if extra := self._extra_presets:
+                return [PRESET_NONE] + list(extra)
             return None
         return [PRESET_NONE] + list(modes.values())
 

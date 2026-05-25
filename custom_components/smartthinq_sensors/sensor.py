@@ -185,6 +185,25 @@ WASH_DEV_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
 )
 REFRIGERATOR_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
     ThinQSensorEntityDescription(
+        key=RefrigeratorFeatures.ACTIVESAVINGSTATUS,
+        name="Active saving status",
+        icon="mdi:gauge",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    ThinQSensorEntityDescription(
+        key=RefrigeratorFeatures.SMARTSAVINGMODESTATUS,
+        name="Smart saving active",
+        icon="mdi:leaf",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    ThinQSensorEntityDescription(
+        key=RefrigeratorFeatures.LOCKINGSTATUS,
+        name="Control lock",
+        icon="mdi:lock",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    ThinQSensorEntityDescription(
         key=DEFAULT_SENSOR,
         icon=DEFAULT_ICON,
         value_fn=lambda x: x.power_state,
@@ -221,6 +240,12 @@ REFRIGERATOR_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
     ),
 )
 AC_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
+    ThinQSensorEntityDescription(
+        key=AirConditionerFeatures.DIAGNOSIS,
+        name="Diagnosis",
+        icon="mdi:stethoscope",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     ThinQSensorEntityDescription(
         key=AirConditionerFeatures.ROOM_TEMP,
         name="Room temperature",
