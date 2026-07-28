@@ -725,6 +725,10 @@ class LGESensor(CoordinatorEntity, RestoreEntity, SensorEntity):
         if self.entity_description.restore_last_value:
             value = self._get_sensor_state() if self._api.available else None
             if value in _NO_VALUE_STATES:
+                # Nothing retained yet: show the live placeholder rather than
+                # turning a "-" into "unknown".
+                if self._restored_value is None:
+                    return value
                 return self._restored_value
             self._restored_value = value
             return value
