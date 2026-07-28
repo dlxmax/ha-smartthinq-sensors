@@ -208,7 +208,6 @@ REFRIGERATOR_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
         key=RefrigeratorFeatures.LOCKINGSTATUS,
         name="Control lock",
         icon="mdi:lock",
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     ThinQSensorEntityDescription(
         key=DEFAULT_SENSOR,

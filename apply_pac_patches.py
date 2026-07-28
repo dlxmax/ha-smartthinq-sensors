@@ -443,7 +443,6 @@ edit(SENSOR,
      '        key=RefrigeratorFeatures.LOCKINGSTATUS,\n'
      '        name="Control lock",\n'
      '        icon="mdi:lock",\n'
-     '        entity_category=EntityCategory.DIAGNOSTIC,\n'
      '    ),\n')
 
 # ============================ climate.py ============================
