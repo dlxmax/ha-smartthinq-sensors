@@ -551,6 +551,92 @@ edit(WD,
      '                tcl_count = None\n'
      '        self._status = WMStatus(self, tcl_count=tcl_count)\n')
 
+# =================== sensor.py: retained tub-clean counter ===================
+# The wideq-side fix stops "N/A" poisoning the value, but it is in-memory only.
+# RestoreEntity carries the last real count across a Home Assistant restart.
+edit(SENSOR,
+     '    PERCENTAGE,\n'
+     '    STATE_UNAVAILABLE,\n',
+     '    PERCENTAGE,\n'
+     '    STATE_UNAVAILABLE,\n'
+     '    STATE_UNKNOWN,\n')
+
+edit(SENSOR,
+     'from homeassistant.helpers.entity_platform import AddEntitiesCallback, current_platform\n',
+     'from homeassistant.helpers.entity_platform import AddEntitiesCallback, current_platform\n'
+     'from homeassistant.helpers.restore_state import RestoreEntity\n')
+
+edit(SENSOR,
+     '_LOGGER = logging.getLogger(__name__)\n',
+     '_LOGGER = logging.getLogger(__name__)\n'
+     '\n'
+     '# States that carry no reading, and so must not overwrite a retained value.\n'
+     '_NO_VALUE_STATES = (None, "N/A", "-", STATE_UNAVAILABLE, STATE_UNKNOWN)\n')
+
+edit(SENSOR,
+     '    feature_attributes: dict[str, str] | None = None\n',
+     '    feature_attributes: dict[str, str] | None = None\n'
+     '    restore_last_value: bool = False\n')
+
+edit(SENSOR,
+     '        key=WashDeviceFeatures.TUBCLEAN_COUNT,\n'
+     '        name="Tub clean counter",\n'
+     '        icon=DEFAULT_ICON,\n'
+     '        entity_registry_enabled_default=False,\n'
+     '    ),\n',
+     '        key=WashDeviceFeatures.TUBCLEAN_COUNT,\n'
+     '        name="Tub clean counter",\n'
+     '        icon=DEFAULT_ICON,\n'
+     '        entity_registry_enabled_default=False,\n'
+     '        restore_last_value=True,\n'
+     '    ),\n')
+
+edit(SENSOR,
+     'class LGESensor(CoordinatorEntity, SensorEntity):\n',
+     'class LGESensor(CoordinatorEntity, RestoreEntity, SensorEntity):\n')
+
+edit(SENSOR,
+     '        self._is_default = description.key == DEFAULT_SENSOR\n',
+     '        self._is_default = description.key == DEFAULT_SENSOR\n'
+     '        self._restored_value = None\n'
+     '\n'
+     '    async def async_added_to_hass(self) -> None:\n'
+     '        """Restore the previous value for sensors that must survive a restart."""\n'
+     '        await super().async_added_to_hass()\n'
+     '        if not self.entity_description.restore_last_value:\n'
+     '            return\n'
+     '        if (last_state := await self.async_get_last_state()) is None:\n'
+     '            return\n'
+     '        if last_state.state not in _NO_VALUE_STATES:\n'
+     '            self._restored_value = last_state.state\n')
+
+edit(SENSOR,
+     '        """Return the state of the sensor."""\n'
+     '        if not self.available:\n'
+     '            return STATE_UNAVAILABLE\n'
+     '        return self._get_sensor_state()\n',
+     '        """Return the state of the sensor."""\n'
+     '        if self.entity_description.restore_last_value:\n'
+     '            value = self._get_sensor_state() if self._api.available else None\n'
+     '            if value in _NO_VALUE_STATES:\n'
+     '                return self._restored_value\n'
+     '            self._restored_value = value\n'
+     '            return value\n'
+     '        if not self.available:\n'
+     '            return STATE_UNAVAILABLE\n'
+     '        return self._get_sensor_state()\n')
+
+edit(SENSOR,
+     '        """Return True if entity is available."""\n'
+     '        return self._api.available\n',
+     '        """Return True if entity is available."""\n'
+     '        if self.entity_description.restore_last_value:\n'
+     '            # A retained counter stays meaningful while the appliance is off,\n'
+     '            # so keep the entity available as long as we have a value to show.\n'
+     '            if self._restored_value is not None:\n'
+     '                return True\n'
+     '        return self._api.available\n')
+
 applied = skipped = missing = 0
 for path, old, new, optional in E:
     src = open(path, encoding="utf-8").read()

@@ -63,8 +63,19 @@ raw, unregistered properties; they are now registered as features rather than du
 **Washer** — the tub-clean counter dropped to the literal string `"N/A"` whenever the
 machine was powered off, and `reset_status()` then carried that placeholder forward
 permanently, so it could never recover. The last real count is now retained instead.
-Note this is in-memory only: it does not survive a Home Assistant restart, because the
-integration's sensors do not implement `RestoreEntity`.
+
+That fix alone is in-memory only, so the count still reset on every Home Assistant
+restart. `ThinQSensorEntityDescription` therefore gained an opt-in
+`restore_last_value` flag, backed by `RestoreEntity`, and it is set on the tub-clean
+counter. A sensor that opts in:
+
+- restores its previous state on startup, ignoring `None` / `"N/A"` / `"-"` /
+  `unavailable` / `unknown`, which carry no reading;
+- never lets one of those placeholder states overwrite the retained value;
+- stays `available` while it holds a value, so the count remains visible with the
+  appliance powered off.
+
+Every other sensor is untouched — the flag defaults to `False`.
 
 ## Capability detection caveat
 

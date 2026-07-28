@@ -20,6 +20,7 @@ from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     PERCENTAGE,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     EntityCategory,
     UnitOfPower,
     UnitOfTime,
@@ -28,6 +29,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback, current_platform
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -81,6 +83,9 @@ SUPPORT_SET_TIME = 2
 
 _LOGGER = logging.getLogger(__name__)
 
+# States that carry no reading, and so must not overwrite a retained value.
+_NO_VALUE_STATES = (None, "N/A", "-", STATE_UNAVAILABLE, STATE_UNKNOWN)
+
 
 @dataclass
 class ThinQSensorEntityDescription(SensorEntityDescription):
@@ -89,6 +94,7 @@ class ThinQSensorEntityDescription(SensorEntityDescription):
     unit_fn: Callable[[Any], str] | None = None
     value_fn: Callable[[Any], float | str] | None = None
     feature_attributes: dict[str, str] | None = None
+    restore_last_value: bool = False
 
 
 WASH_DEV_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
@@ -154,6 +160,7 @@ WASH_DEV_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
         name="Tub clean counter",
         icon=DEFAULT_ICON,
         entity_registry_enabled_default=False,
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.HALFLOAD,
@@ -660,7 +667,7 @@ async def async_setup_entry(
     )
 
 
-class LGESensor(CoordinatorEntity, SensorEntity):
+class LGESensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     """Class to monitor sensors for LGE device"""
 
     entity_description: ThinQSensorEntityDescription
@@ -685,6 +692,17 @@ class LGESensor(CoordinatorEntity, SensorEntity):
         if not description.translation_key and description.name is UNDEFINED:
             self._attr_name = get_entity_name(api, description.key)
         self._is_default = description.key == DEFAULT_SENSOR
+        self._restored_value = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the previous value for sensors that must survive a restart."""
+        await super().async_added_to_hass()
+        if not self.entity_description.restore_last_value:
+            return
+        if (last_state := await self.async_get_last_state()) is None:
+            return
+        if last_state.state not in _NO_VALUE_STATES:
+            self._restored_value = last_state.state
 
     @property
     def supported_features(self) -> int:
@@ -699,6 +717,12 @@ class LGESensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> float | int | str | None:
         """Return the state of the sensor."""
+        if self.entity_description.restore_last_value:
+            value = self._get_sensor_state() if self._api.available else None
+            if value in _NO_VALUE_STATES:
+                return self._restored_value
+            self._restored_value = value
+            return value
         if not self.available:
             return STATE_UNAVAILABLE
         return self._get_sensor_state()
@@ -721,6 +745,11 @@ class LGESensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
+        if self.entity_description.restore_last_value:
+            # A retained counter stays meaningful while the appliance is off,
+            # so keep the entity available as long as we have a value to show.
+            if self._restored_value is not None:
+                return True
         return self._api.available
 
     @property
