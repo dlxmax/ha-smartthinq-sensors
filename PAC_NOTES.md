@@ -6,6 +6,27 @@ Developed against an **LG 휘센 2-in-1 FNQ161MK4W** (2016), which the ThinQ API
 `apply_pac_patches.py <path-to-custom_components/smartthinq_sensors>` reproduces every
 change on this branch against a pristine tree. It is idempotent.
 
+## Branches
+
+- **`master`** — what HACS installs. The patches plus one extra commit dropping
+  `zip_release`/`filename` from `hacs.json`.
+- **`fnq161-pac-support`** — the same patches with `hacs.json` untouched, kept clean for
+  an upstream pull request.
+
+Upstream ships `"zip_release": true`, so HACS looks for a `smartthinq_sensors.zip` asset
+on a GitHub release. This fork cuts no releases and tracks its default branch instead, so
+that key has to go or every download 404s.
+
+## Installing via HACS
+
+Add `dlxmax/ha-smartthinq-sensors` as a custom repository (category: integration). Because
+`ollo69/ha-smartthinq-sensors` writes to the same `custom_components/smartthinq_sensors`
+folder, remove that one **first** — HACS deletes the folder on remove, so a download that
+fails leaves nothing behind. Back the folder up before starting.
+
+HACS reports the installed version as a commit sha rather than a tag, since there are no
+releases; a new commit on `master` shows up as an available update.
+
 ## Terminology, from LG's own model JSON
 
 ```json
