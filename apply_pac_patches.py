@@ -15,6 +15,7 @@ REF = os.path.join(ROOT, "wideq", "devices", "refrigerator.py")
 SWITCH = os.path.join(ROOT, "switch.py")
 SENSOR = os.path.join(ROOT, "sensor.py")
 CLIMATE = os.path.join(ROOT, "climate.py")
+DEVICE = os.path.join(ROOT, "wideq", "device.py")
 
 E = []          # (path, old, new, optional)
 def edit(p, o, n, optional=False): E.append((p, o, n, optional))
@@ -641,6 +642,24 @@ edit(SENSOR,
      '                return True\n'
      '        return self._api.available\n')
 
+# =================== device.py: tolerate "NS" in numeric enums ===================
+# LG reports the literal "NS" (not supported) for values a unit does not provide.
+# lookup_enum(key, data_is_num=True) does str(int(value)) unguarded, so an "NS"
+# FilterMax raises ValueError inside _update_features -> init_device() fails ->
+# the whole ThinQ config entry goes "not ready" and every LG entity disappears.
+edit(DEVICE,
+     "        value = self._data[curr_key]\n"
+     "        if data_is_num:\n"
+     "            value = str(int(value))\n",
+     "        value = self._data[curr_key]\n"
+     "        if data_is_num:\n"
+     "            try:\n"
+     "                value = str(int(value))\n"
+     "            except (TypeError, ValueError):\n"
+     "                # Devices report \"NS\" (not supported) for values they do not\n"
+     "                # provide. That is not a number, so there is no enum to look up.\n"
+     "                return None\n")
+
 applied = skipped = missing = 0
 for path, old, new, optional in E:
     src = open(path, encoding="utf-8").read()
@@ -663,6 +682,6 @@ for path, old, new, optional in E:
 
 print("\napplied=%d already-current=%d not-applicable=%d" % (applied, skipped, missing))
 print("\n=== syntax check ===")
-for f in (CONST, AC, REF, WD, SWITCH, SENSOR, CLIMATE):
+for f in (CONST, AC, REF, WD, SWITCH, SENSOR, CLIMATE, DEVICE):
     py_compile.compile(f, doraise=True)
     print("  OK", os.path.basename(f))
