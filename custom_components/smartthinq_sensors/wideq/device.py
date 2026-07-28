@@ -1045,7 +1045,12 @@ class DeviceStatus:
             return None
         value = self._data[curr_key]
         if data_is_num:
-            value = str(int(value))
+            try:
+                value = str(int(value))
+            except (TypeError, ValueError):
+                # Devices report "NS" (not supported) for values they do not
+                # provide. That is not a number, so there is no enum to look up.
+                return None
 
         return self._device.model_info.enum_name(curr_key, value)
 
