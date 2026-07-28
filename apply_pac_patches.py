@@ -15,6 +15,7 @@ REF = os.path.join(ROOT, "wideq", "devices", "refrigerator.py")
 SWITCH = os.path.join(ROOT, "switch.py")
 SENSOR = os.path.join(ROOT, "sensor.py")
 CLIMATE = os.path.join(ROOT, "climate.py")
+BINSENS = os.path.join(ROOT, "binary_sensor.py")
 DEVICE = os.path.join(ROOT, "wideq", "device.py")
 
 E = []          # (path, old, new, optional)
@@ -660,6 +661,20 @@ edit(DEVICE,
      "                # provide. That is not a number, so there is no enum to look up.\n"
      "                return None\n")
 
+# ============ binary_sensor.py: fridge door name ============
+# The door device class renders as Open/Closed, so "Door open" reads "Door open: Open".
+edit(BINSENS,
+     "REFRIGERATOR_BINARY_SENSORS: tuple[ThinQBinarySensorEntityDescription, ...] = (\n"
+     "    ThinQBinarySensorEntityDescription(\n"
+     "        key=ATTR_DOOR_OPEN,\n"
+     '        name="Door open",\n',
+     "REFRIGERATOR_BINARY_SENSORS: tuple[ThinQBinarySensorEntityDescription, ...] = (\n"
+     "    ThinQBinarySensorEntityDescription(\n"
+     "        key=ATTR_DOOR_OPEN,\n"
+     "        # The door device class already reads out as Open/Closed, so \"Door open\"\n"
+     '        # renders as "Door open: Open".\n'
+     '        name="Door",\n')
+
 applied = skipped = missing = 0
 for path, old, new, optional in E:
     src = open(path, encoding="utf-8").read()
@@ -682,6 +697,6 @@ for path, old, new, optional in E:
 
 print("\napplied=%d already-current=%d not-applicable=%d" % (applied, skipped, missing))
 print("\n=== syntax check ===")
-for f in (CONST, AC, REF, WD, SWITCH, SENSOR, CLIMATE, DEVICE):
+for f in (CONST, AC, REF, WD, SWITCH, SENSOR, CLIMATE, DEVICE, BINSENS):
     py_compile.compile(f, doraise=True)
     print("  OK", os.path.basename(f))
