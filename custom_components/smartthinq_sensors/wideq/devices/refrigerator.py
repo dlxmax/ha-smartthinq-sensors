@@ -647,22 +647,25 @@ class RefrigeratorStatus(DeviceStatus):
     @property
     def locked_state(self):
         """Return current locked state."""
-        state = self.lookup_enum("LockingStatus")
+        key = "LockingStatus"
+        state = self.lookup_enum(key)
         if not state:
             return StateOptions.NONE
         return self._update_feature(
             RefrigeratorFeatures.LOCKINGSTATUS,
             self._device.get_enum_text(state),
             False,
+            key,
         )
 
     @property
     def active_saving_status(self):
         """Return current active saving status."""
-        if (status := self._data.get("ActiveSavingStatus")) is None:
+        key = "ActiveSavingStatus"
+        if (status := self._data.get(key)) is None:
             return None
         return self._update_feature(
-            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False
+            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False, key
         )
 
     @property
@@ -675,6 +678,7 @@ class RefrigeratorStatus(DeviceStatus):
             RefrigeratorFeatures.SMARTSAVINGMODESTATUS,
             self._device.get_enum_text(status),
             False,
+            key,
         )
 
     def _update_features(self):

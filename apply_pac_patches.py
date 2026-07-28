@@ -316,22 +316,25 @@ edit(REF,
      "    @property\n"
      "    def locked_state(self):\n"
      '        """Return current locked state."""\n'
-     '        state = self.lookup_enum("LockingStatus")\n'
+     '        key = "LockingStatus"\n'
+     "        state = self.lookup_enum(key)\n"
      "        if not state:\n"
      "            return StateOptions.NONE\n"
      "        return self._update_feature(\n"
      "            RefrigeratorFeatures.LOCKINGSTATUS,\n"
      "            self._device.get_enum_text(state),\n"
      "            False,\n"
+     "            key,\n"
      "        )\n"
      "\n"
      "    @property\n"
      "    def active_saving_status(self):\n"
      '        """Return current active saving status."""\n'
-     '        if (status := self._data.get("ActiveSavingStatus")) is None:\n'
+     '        key = "ActiveSavingStatus"\n'
+     "        if (status := self._data.get(key)) is None:\n"
      "            return None\n"
      "        return self._update_feature(\n"
-     "            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False\n"
+     "            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False, key\n"
      "        )\n"
      "\n"
      "    @property\n"
@@ -344,6 +347,7 @@ edit(REF,
      "            RefrigeratorFeatures.SMARTSAVINGMODESTATUS,\n"
      "            self._device.get_enum_text(status),\n"
      "            False,\n"
+     "            key,\n"
      "        )\n"
      "\n"
      "    def _update_features(self):\n"
