@@ -655,7 +655,7 @@ class RefrigeratorStatus(DeviceStatus):
             RefrigeratorFeatures.LOCKINGSTATUS,
             self._device.get_enum_text(state),
             False,
-            key,
+            FEATURE_KEY_IGNORE,
         )
 
     @property
@@ -665,7 +665,7 @@ class RefrigeratorStatus(DeviceStatus):
         if (status := self._data.get(key)) is None:
             return None
         return self._update_feature(
-            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False, key
+            RefrigeratorFeatures.ACTIVESAVINGSTATUS, status, False, FEATURE_KEY_IGNORE
         )
 
     @property
@@ -678,7 +678,7 @@ class RefrigeratorStatus(DeviceStatus):
             RefrigeratorFeatures.SMARTSAVINGMODESTATUS,
             self._device.get_enum_text(status),
             False,
-            key,
+            FEATURE_KEY_IGNORE,
         )
 
     def _update_features(self):
