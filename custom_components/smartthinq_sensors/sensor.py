@@ -105,34 +105,40 @@ WASH_DEV_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
     ),
     ThinQSensorEntityDescription(
         key=ATTR_CURRENT_COURSE,
-        name="Current course",
+        name="Course",
         icon="mdi:pin-outline",
         value_fn=lambda x: x.current_course,
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.RUN_STATE,
         name="Run state",
         icon=DEFAULT_ICON,
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.PROCESS_STATE,
         name="Process state",
         icon=DEFAULT_ICON,
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.SPINSPEED,
         name="Spin speed",
         icon="mdi:rotate-3d",
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.WATERTEMP,
         name="Water temp",
         icon="mdi:thermometer-lines",
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.RINSEMODE,
         name="Rinse mode",
         icon="mdi:waves",
+        restore_last_value=True,
     ),
     ThinQSensorEntityDescription(
         key=WashDeviceFeatures.TEMPCONTROL,

@@ -674,6 +674,96 @@ edit(BINSENS,
      '        # renders as "Door open: Open".\n'
      '        name="Door",\n')
 
+# =================== washer: readable states that persist ===================
+# This washer ships NO model language pack (langPackModelUri is empty) and the
+# product pack lacks its @WM_KR_TT27_* keys, so states rendered as raw keys.
+edit(DEVICE,
+     "        if not text_value and self._local_lang_pack:\n"
+     "            text_value = self._local_lang_pack.get(enum_name)\n"
+     "        if not text_value:\n"
+     "            text_value = enum_name\n"
+     "\n"
+     "        return text_value\n",
+     "        if not text_value and self._local_lang_pack:\n"
+     "            text_value = self._local_lang_pack.get(enum_name)\n"
+     "        if not text_value:\n"
+     "            text_value = self._derive_enum_text(enum_name)\n"
+     "\n"
+     "        return text_value\n"
+     "\n"
+     "    @staticmethod\n"
+     "    def _derive_enum_text(enum_name):\n"
+     '        """Derive readable text from an enum key no language pack resolves.\n'
+     "\n"
+     "        Some models ship no model language pack at all (langPackModelUri is\n"
+     "        empty) and the product pack does not carry their keys, so the raw key\n"
+     "        would otherwise be shown as the state. The keys are structured:\n"
+     "\n"
+     "            @WM_KR_TT27_WD_WIFI_OPTION_WATERTEMP_40_W        -> 40\n"
+     "            @WM_KR_TT27_WD_WIFI_COURSE_COTTON_W              -> Cotton\n"
+     "            @WM_KR_TT27_WD_WIFI_OPTION_SPINSPEED_EXTRA_HIGH_W -> Extra high\n"
+     "\n"
+     "        Everything up to and including WIFI is product/model metadata, then a\n"
+     "        group, then for options the name of the setting, then the value.\n"
+     '        """\n'
+     '        if not isinstance(enum_name, str) or not enum_name.startswith("@"):\n'
+     "            return enum_name\n"
+     "\n"
+     '        parts = enum_name[1:].split("_")\n'
+     '        if parts and parts[-1] in ("W", "S"):  # LG\'s word / sentence suffix\n'
+     "            parts = parts[:-1]\n"
+     '        if "WIFI" not in parts:\n'
+     "            return enum_name\n"
+     '        parts = parts[parts.index("WIFI") + 1 :]\n'
+     "        if not parts:\n"
+     "            return enum_name\n"
+     "\n"
+     "        # An option key names the setting before its value; a course key does not.\n"
+     "        group = parts[0]\n"
+     '        if group in ("OPTION", "COURSE", "SMARTCOURSE", "DOWNLOADCOURSE", "STATE"):\n'
+     "            parts = parts[1:]\n"
+     '            if group == "OPTION" and len(parts) > 1:\n'
+     "                parts = parts[1:]\n"
+     "        if not parts:\n"
+     "            return enum_name\n"
+     "\n"
+     '        value = " ".join(parts)\n'
+     "        if value.isdigit():\n"
+     "            return value\n"
+     "        return value.capitalize()\n")
+
+# Course: shorter name, and keep the last value while the machine is off.
+edit(SENSOR,
+     "        key=ATTR_CURRENT_COURSE,\n"
+     '        name="Current course",\n'
+     '        icon="mdi:pin-outline",\n'
+     "        value_fn=lambda x: x.current_course,\n"
+     "    ),\n",
+     "        key=ATTR_CURRENT_COURSE,\n"
+     '        name="Course",\n'
+     '        icon="mdi:pin-outline",\n'
+     "        value_fn=lambda x: x.current_course,\n"
+     "        restore_last_value=True,\n"
+     "    ),\n")
+
+for _feat, _name, _icon in (
+    ("RUN_STATE", "Run state", "DEFAULT_ICON"),
+    ("PROCESS_STATE", "Process state", "DEFAULT_ICON"),
+    ("SPINSPEED", "Spin speed", '"mdi:rotate-3d"'),
+    ("WATERTEMP", "Water temp", '"mdi:thermometer-lines"'),
+    ("RINSEMODE", "Rinse mode", '"mdi:waves"'),
+):
+    edit(SENSOR,
+         "        key=WashDeviceFeatures.%s,\n" % _feat
+         + '        name="%s",\n' % _name
+         + "        icon=%s,\n" % _icon
+         + "    ),\n",
+         "        key=WashDeviceFeatures.%s,\n" % _feat
+         + '        name="%s",\n' % _name
+         + "        icon=%s,\n" % _icon
+         + "        restore_last_value=True,\n"
+         + "    ),\n")
+
 applied = skipped = missing = 0
 for path, old, new, optional in E:
     src = open(path, encoding="utf-8").read()

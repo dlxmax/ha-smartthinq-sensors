@@ -841,9 +841,50 @@ class Device:
         if not text_value and self._local_lang_pack:
             text_value = self._local_lang_pack.get(enum_name)
         if not text_value:
-            text_value = enum_name
+            text_value = self._derive_enum_text(enum_name)
 
         return text_value
+
+    @staticmethod
+    def _derive_enum_text(enum_name):
+        """Derive readable text from an enum key no language pack resolves.
+
+        Some models ship no model language pack at all (langPackModelUri is
+        empty) and the product pack does not carry their keys, so the raw key
+        would otherwise be shown as the state. The keys are structured:
+
+            @WM_KR_TT27_WD_WIFI_OPTION_WATERTEMP_40_W        -> 40
+            @WM_KR_TT27_WD_WIFI_COURSE_COTTON_W              -> Cotton
+            @WM_KR_TT27_WD_WIFI_OPTION_SPINSPEED_EXTRA_HIGH_W -> Extra high
+
+        Everything up to and including WIFI is product/model metadata, then a
+        group, then for options the name of the setting, then the value.
+        """
+        if not isinstance(enum_name, str) or not enum_name.startswith("@"):
+            return enum_name
+
+        parts = enum_name[1:].split("_")
+        if parts and parts[-1] in ("W", "S"):  # LG's word / sentence suffix
+            parts = parts[:-1]
+        if "WIFI" not in parts:
+            return enum_name
+        parts = parts[parts.index("WIFI") + 1 :]
+        if not parts:
+            return enum_name
+
+        # An option key names the setting before its value; a course key does not.
+        group = parts[0]
+        if group in ("OPTION", "COURSE", "SMARTCOURSE", "DOWNLOADCOURSE", "STATE"):
+            parts = parts[1:]
+            if group == "OPTION" and len(parts) > 1:
+                parts = parts[1:]
+        if not parts:
+            return enum_name
+
+        value = " ".join(parts)
+        if value.isdigit():
+            return value
+        return value.capitalize()
 
     def is_unknown_status(self, status):
         """Return if status is unknown."""
