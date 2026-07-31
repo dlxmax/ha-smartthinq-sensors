@@ -626,6 +626,19 @@ class Device:
                 await self._client.session.set_device_controls(
                     device_id, ctrl_key, command, ctrl_value, ctrl_data
                 )
+            except core_exc.DelayedResponseError:
+                # "제품 응답 지연" - the device did not answer in time. Seen when
+                # another client is mid-session with it, and it clears on a
+                # second attempt. Not a permission problem: the app shows this
+                # one without releasing anything, so neither do we. Commands are
+                # absolute value sets, so repeating one is harmless.
+                _LOGGER.debug(
+                    "Device %s did not answer command in time, retrying", device_id
+                )
+                await asyncio.sleep(SLEEP_BETWEEN_RETRIES)
+                await self._client.session.set_device_controls(
+                    device_id, ctrl_key, command, ctrl_value, ctrl_data
+                )
             return
 
         await self._client.session.device_v2_controls(
