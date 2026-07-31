@@ -94,6 +94,7 @@ class ThinQSensorEntityDescription(SensorEntityDescription):
     unit_fn: Callable[[Any], str] | None = None
     value_fn: Callable[[Any], float | str] | None = None
     feature_attributes: dict[str, str] | None = None
+    attrs_fn: Callable[[Any], dict] | None = None
     restore_last_value: bool = False
 
 
@@ -197,6 +198,47 @@ WASH_DEV_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
     ),
 )
 REFRIGERATOR_SENSORS: tuple[ThinQSensorEntityDescription, ...] = (
+    # LG counts the doors from midnight and reports today's total as it grows,
+    # so these two really are running totals and the recorder can chart them.
+    ThinQSensorEntityDescription(
+        key="door_openings",
+        name="Door openings",
+        icon="mdi:door-open",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda x: x.device.history_value("door_openings"),
+        attrs_fn=lambda x: x.device.history_attributes("door_openings"),
+        restore_last_value=True,
+    ),
+    ThinQSensorEntityDescription(
+        key="door_open_time",
+        name="Door open time",
+        icon="mdi:timer-sand",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda x: x.device.history_value("door_open_time"),
+        attrs_fn=lambda x: x.device.history_attributes("door_open_time"),
+        restore_last_value=True,
+    ),
+    # Cooling runs are the other way round: today never appears, and yesterday
+    # is still being revised, so this is a report about a past day rather than a
+    # measurement of now. No state class, and its history is kept as an external
+    # series in history_stats instead of being compiled from this sensor.
+    ThinQSensorEntityDescription(
+        key="max_cooling_runs",
+        name="Max cooling runs",
+        icon="mdi:snowflake-alert",
+        value_fn=lambda x: x.device.history_value("max_cooling_runs"),
+        attrs_fn=lambda x: x.device.history_attributes("max_cooling_runs"),
+        restore_last_value=True,
+    ),
+    ThinQSensorEntityDescription(
+        key="diagnosis",
+        name="Diagnosis",
+        icon="mdi:clipboard-pulse-outline",
+        value_fn=lambda x: x.device.diagnosis_state,
+        attrs_fn=lambda x: x.device.diagnosis_attributes,
+        restore_last_value=True,
+    ),
     ThinQSensorEntityDescription(
         key=RefrigeratorFeatures.ACTIVESAVINGSTATUS,
         name="Active saving status",
@@ -769,6 +811,9 @@ class LGESensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         """Return the optional state attributes."""
+        if self.entity_description.attrs_fn is not None and self._wrap_device:
+            return self.entity_description.attrs_fn(self._wrap_device)
+
         if self._is_default and self._wrap_device:
             return self._wrap_device.extra_state_attributes
 

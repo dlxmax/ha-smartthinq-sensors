@@ -20,11 +20,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
 from .device_helpers import LGEBaseDevice
-from .wideq import WM_DEVICE_TYPES, WashDeviceFeatures
+from .history_stats import async_update_history
+from .wideq import WM_DEVICE_TYPES, DeviceType, WashDeviceFeatures
 
 # general button attributes
 ATTR_REMOTE_START = "remote_start"
 ATTR_PAUSE = "device_pause"
+ATTR_DIAGNOSE = "diagnose"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +46,9 @@ class ThinQButtonEntityDescription(
 
     available_fn: Callable[[Any], bool] | None = None
     related_feature: str | None = None
+    # Runs after the press with the hass object, for work the wideq layer
+    # cannot do on its own.
+    extra_action_fn: Callable[[HomeAssistant, Any], Awaitable[None]] | None = None
 
 
 WASH_DEV_BUTTON: tuple[ThinQButtonEntityDescription, ...] = (
@@ -67,7 +72,18 @@ WASH_DEV_BUTTON: tuple[ThinQButtonEntityDescription, ...] = (
     ),
 )
 
+REFRIGERATOR_BUTTON: tuple[ThinQButtonEntityDescription, ...] = (
+    ThinQButtonEntityDescription(
+        key=ATTR_DIAGNOSE,
+        name="Diagnose",
+        icon="mdi:stethoscope",
+        press_action_fn=lambda x: x.device.run_diagnosis(),
+        extra_action_fn=async_update_history,
+    ),
+)
+
 BUTTON_ENTITIES = {
+    DeviceType.REFRIGERATOR: REFRIGERATOR_BUTTON,
     **{dev_type: WASH_DEV_BUTTON for dev_type in WM_DEVICE_TYPES},
 }
 
@@ -146,4 +162,6 @@ class LGEButton(CoordinatorEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Triggers service."""
         await self.entity_description.press_action_fn(self._wrap_device)
+        if self.entity_description.extra_action_fn is not None:
+            await self.entity_description.extra_action_fn(self.hass, self._api)
         self._api.async_set_updated()

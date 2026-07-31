@@ -61,6 +61,7 @@ from .wideq.core_exceptions import (
     MonitorUnavailableError,
     NotConnectedError,
 )
+from .history_stats import async_setup_history
 from .wideq.device import Device as ThinQDevice
 
 SMARTTHINQ_PLATFORMS = [
@@ -348,6 +349,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     start_devices_discovery(hass, entry, client)
+    async_setup_history(hass, entry)
 
     return True
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from statistics import median
+import time
+import uuid
 
 from ..const import RefrigeratorFeatures, StateOptions, TemperatureUnit
 from ..core_async import ClientAsync
@@ -61,6 +64,20 @@ CMD_STATE_FREEZER_TEMP = [CTRL_BASIC, ["SetControl", "basicCtrl"], STATE_FREEZER
 
 _LOGGER = logging.getLogger(__name__)
 
+# The app reads the compressor "active cooling" history from this endpoint: a
+# daily count of how often the fridge had to run at full power. A day well
+# above the rest of the week means a door left ajar, something warm inside or
+# an item blocking a vent.
+DIAG_ACTIVE_COOLING_PATH = "recommendation/activeCoolingDetails"
+# The same history screens read daily door figures from here: how many times
+# each door was opened and how long they stood open, in milliseconds.
+HISTORY_DOOR_PATH = "energy/inquiryDoorInfoMonth"
+# Only flag a day that clearly stands out, so normal variation stays quiet.
+DIAG_COOLING_MULTIPLIER = 2
+DIAG_COOLING_MARGIN = 2
+DIAG_MIN_DAYS = 3
+DIAG_NO_ISSUES = "OK"
+
 
 class RefrigeratorDevice(Device):
     """A higher-level interface for a refrigerator."""
@@ -72,6 +89,8 @@ class RefrigeratorDevice(Device):
         self._fridge_ranges = None
         self._freezer_temps = None
         self._freezer_ranges = None
+        self._diagnosis: dict | None = None
+        self._history: dict = {}
 
     def _get_feature_info(self, item_key):
         config = self.model_info.config_value("visibleItems")
@@ -355,6 +374,158 @@ class RefrigeratorDevice(Device):
         keys = self._get_cmd_keys(CMD_STATE_FREEZER_TEMP)
         await self.set(keys[0], keys[1], key=keys[2], value=temp_key)
         self._status.update_status_feat(status_key, temp_key, False)
+
+    def set_history(self, values: dict) -> None:
+        """Store the daily totals just read back from LG."""
+        self._history = values
+
+    def history_value(self, key: str) -> float | None:
+        """Return the running total for one history series."""
+        if entry := self._history.get(key):
+            return entry.get("value")
+        return None
+
+    def history_attributes(self, key: str) -> dict:
+        """Return the context stored alongside one history series."""
+        if entry := self._history.get(key):
+            return {k: v for k, v in entry.items() if k != "value"}
+        return {}
+
+    @property
+    def diagnosis(self) -> dict | None:
+        """Return the result of the last diagnosis run."""
+        return self._diagnosis
+
+    @property
+    def diagnosis_state(self) -> str | None:
+        """Return a one line verdict for the last diagnosis run."""
+        if not self._diagnosis:
+            return None
+        return self._diagnosis.get("state")
+
+    @property
+    def diagnosis_attributes(self) -> dict:
+        """Return the detail behind the last diagnosis run."""
+        if not self._diagnosis:
+            return {}
+        return {k: v for k, v in self._diagnosis.items() if k != "state"}
+
+    async def get_active_cooling_history(self) -> list:
+        """Return LG's daily count of full power cooling runs."""
+        return await self._get_active_cooling()
+
+    async def get_door_history(self, start: str, end: str) -> list:
+        """Return LG's daily door figures between two YYYYMMDD dates."""
+        res = await self._client.session.post(
+            HISTORY_DOOR_PATH,
+            {
+                "deviceId": self._device_info.device_id,
+                "period": "day",
+                "startDate": start,
+                "endDate": end,
+            },
+        )
+        return res.get("item") or []
+
+    async def _get_active_cooling(self) -> list:
+        """Return the daily active cooling counts LG holds for this fridge."""
+        res = await self._client.session.post(
+            DIAG_ACTIVE_COOLING_PATH,
+            {
+                "deviceId": self._device_info.device_id,
+                "workId": str(uuid.uuid4()),
+                "timeStamp": int(time.time()),
+            },
+        )
+        return res.get("activeCooling") or res.get("item") or []
+
+    @staticmethod
+    def _check_active_cooling(series: list) -> tuple[list, list, dict]:
+        """Compare the latest day against the rest of the recorded week."""
+        values = []
+        for entry in series or []:
+            try:
+                values.append((entry["date"], int(entry["value"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if len(values) < DIAG_MIN_DAYS:
+            return [], [], {}
+
+        latest_date, latest = values[-1]
+        baseline = median(val for _, val in values[:-1])
+        details = {
+            "active_cooling_latest": latest,
+            "active_cooling_latest_date": latest_date,
+            "active_cooling_baseline": baseline,
+            "active_cooling_history": {date: val for date, val in values},
+        }
+        threshold = max(
+            baseline * DIAG_COOLING_MULTIPLIER, baseline + DIAG_COOLING_MARGIN
+        )
+        if latest < threshold:
+            return [], [], details
+        return (
+            ["Compressor working harder than usual"],
+            [
+                f"Full power cooling ran {latest} times on {latest_date}, "
+                f"against {baseline:g} on a typical day this week. Check that "
+                f"every door is shutting, that nothing warm went in recently "
+                f"and that no item is blocking a vent."
+            ],
+            details,
+        )
+
+    async def run_diagnosis(self) -> dict:
+        """Check the fridge for actual faults, ignoring the app's advice."""
+        issues: list[str] = []
+        notes: list[str] = []
+        details: dict = {}
+
+        if self._status:
+            door = self._status.door_opened_state
+            # This model leaves DoorOpenState out of its snapshot, so only
+            # record the door when the fridge actually reports one.
+            if door and door != StateOptions.NONE:
+                details["door"] = door
+            if door and "OPEN" in str(door).upper():
+                issues.append("A door is open")
+                notes.append("The fridge reports a door open right now.")
+
+        try:
+            sds = await self.smart_diagnosis()
+        except Exception as exc:  # noqa: BLE001 - surface it, never raise to UI
+            _LOGGER.warning("Smart Diagnosis not available: %s", exc)
+            details["smart_diagnosis_error"] = str(exc)
+        else:
+            issues.extend(sds["issues"])
+            notes.extend(sds["notes"])
+            details["suppressed_tips"] = sds["suppressed_tips"]
+
+        try:
+            series = await self._get_active_cooling()
+        except Exception as exc:  # noqa: BLE001 - surface it, never raise to UI
+            _LOGGER.warning("Active cooling history not available: %s", exc)
+            details["active_cooling_error"] = str(exc)
+        else:
+            cooling_issues, cooling_notes, cooling_details = (
+                self._check_active_cooling(series)
+            )
+            details.update(cooling_details)
+            # Smart Diagnosis reports max cooling as it happens, so only add the
+            # history finding when it has not already been raised.
+            if cooling_issues and not issues:
+                issues.extend(cooling_issues)
+                notes.extend(cooling_notes)
+
+        self._diagnosis = {
+            "state": ", ".join(issues) if issues else DIAG_NO_ISSUES,
+            "issues": issues,
+            "notes": notes,
+            "checked_at": time.strftime("%Y-%m-%d %H:%M"),
+            **details,
+        }
+        _LOGGER.debug("Fridge diagnosis: %s", self._diagnosis)
+        return self._diagnosis
 
     def reset_status(self):
         self._status = RefrigeratorStatus(self)
