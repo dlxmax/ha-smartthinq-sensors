@@ -3,8 +3,8 @@
 Developed against an **LG 휘센 2-in-1 FNQ161MK4W** (2016), which the ThinQ API reports as
 `PAC_910604_KR`, `PlatformType.THINQ1`.
 
-`apply_pac_patches.py <path-to-custom_components/smartthinq_sensors>` reproduces every
-change on this branch against a pristine tree. It is idempotent.
+`git diff upstream/master..master` is the full inventory of what this fork changes, and
+`git merge upstream/master` carries it onto a newer upstream.
 
 ## Branches
 
