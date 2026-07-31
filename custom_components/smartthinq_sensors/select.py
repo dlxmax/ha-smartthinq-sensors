@@ -37,6 +37,9 @@ class ThinQSelectEntityDescription(
 
     available_fn: Callable[[Any], bool] | None = None
     value_fn: Callable[[Any], str] | None = None
+    attrs_fn: Callable[[Any], dict] | None = None
+    exist_fn: Callable[[Any], bool] | None = None
+    refresh_on_select: bool = False
 
 
 WASH_DEV_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
@@ -48,6 +51,18 @@ WASH_DEV_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
         select_option_fn=lambda x, option: x.device.select_start_course(option),
         available_fn=lambda x: x.device.select_course_enabled,
         value_fn=lambda x: x.device.selected_course,
+    ),
+    ThinQSelectEntityDescription(
+        key="download_course",
+        name="Download course",
+        icon="mdi:tray-arrow-down",
+        options_fn=lambda x: x.device.download_course_list,
+        select_option_fn=lambda x, option: x.device.download_course(option),
+        available_fn=lambda x: x.device.download_course_enabled,
+        value_fn=lambda x: x.device.downloaded_course,
+        attrs_fn=lambda x: x.device.download_course_attributes(),
+        exist_fn=lambda x: bool(x.device.download_course_list),
+        refresh_on_select=True,
     ),
 )
 MICROWAVE_SELECT: tuple[ThinQSelectEntityDescription, ...] = (
@@ -79,6 +94,9 @@ def _select_exist(
     lge_device: LGEDevice, select_desc: ThinQSelectEntityDescription
 ) -> bool:
     """Check if a select exist for device."""
+    if select_desc.exist_fn is not None:
+        return select_desc.exist_fn(lge_device)
+
     if select_desc.value_fn is not None:
         return True
 
@@ -145,6 +163,9 @@ class LGESelect(CoordinatorEntity, SelectEntity):
         """Change the selected option."""
         await self.entity_description.select_option_fn(self._api, option)
         self._api.async_set_updated()
+        if self.entity_description.refresh_on_select:
+            # The new value lives in the appliance, so read it back.
+            await self.coordinator.async_request_refresh()
 
     @property
     def current_option(self) -> str | None:
@@ -157,6 +178,13 @@ class LGESelect(CoordinatorEntity, SelectEntity):
             return self._api.state.device_features.get(feature)
 
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Return the optional state attributes."""
+        if self.entity_description.attrs_fn is None:
+            return None
+        return self.entity_description.attrs_fn(self._api)
 
     @property
     def available(self) -> bool:
