@@ -52,6 +52,18 @@ class DelayedResponseError(APIError):
     """The device delay in the response."""
 
 
+class ControlPermissionError(APIError):
+    """Another client holds the control permission for this V1 device.
+
+    V1 (THINQ1) devices grant control to a single client at a time. The LG
+    ThinQ app acquires the permission when its device page is opened and
+    releases it on exit; a client that quits without releasing leaves the
+    device locked. The server reports this as code 0011, whose generic
+    returnMsg is misleading - the app itself renders it as "<device> is in
+    use, please wait".
+    """
+
+
 class UseOfficialAPIError(APIError):
     """Requests stop responding suggesting to move to official public API."""
 

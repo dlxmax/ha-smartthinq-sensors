@@ -62,6 +62,40 @@ one of each sharing a single outdoor unit; only the stand unit is network-connec
    per poll interval, which defaults to **300 s**. Without that, the switch sprang back to
    its old state for up to five minutes after every command.
 
+## V1 control permission and error 0011
+
+V1 (THINQ1) devices grant **control to one client at a time**. There is no explicit
+acquire — sending `rti/rtiControl` takes the permission — and `rti/delControlPermission`
+releases it. While a client holds it, every other client is refused with code `0011`.
+
+The server's `returnMsg` for `0011` is a generic *"등록되지 않은 모델입니다"* (unregistered
+model), which is misleading and sent this fork down a long dead end. LG's own client knows
+better: the per-device app module (`appModuleUri` in the device info, a zip containing
+`wrm/GAM/GAM.bundle.js`) maps the code to the dialog `@CP_UX30_USE_PRODUCT_WAIT` with the
+device alias substituted in — *"«에어컨» is in use"* — and responds by calling
+`removeControlPermission()`. The app takes the permission when its device page opens and
+releases it on exit, so an app killed on that page leaves the device locked out
+indefinitely. Reads are unaffected: monitoring needs no permission, which is why a device
+in this state still reports state perfectly while every command fails.
+
+Same bundle, worth knowing before reaching for it again: control dispatch is gated on
+`isT20`, defined as `platformType === "thinq2"`. A THINQ1 device gets the same legacy
+`rti/*` path this integration uses — there is no newer route to borrow.
+
+Handling, mirroring the app:
+
+- `0011` maps to `ControlPermissionError` via `API1_ERRORS`, checked before `API2_ERRORS`
+  since the two namespaces reuse numbers for unrelated conditions.
+- `Device._set_control` catches it, calls `delete_permission()` and retries once. The
+  release payload is `{"deviceId": ...}` with no client identity, so it clears whatever
+  permission is on the device, not only one owned by this session.
+- The permission is held for `CONTROL_PERMISSION_GRACE` (60 s) after a command and
+  released by the first poll after that. It used to be released on the *second poll*
+  after a command, which at this fork's 300 s scan interval meant holding the device
+  hostage for up to ten minutes — a side effect of raising the interval from upstream's
+  30 s. Worst case is still bounded by one poll interval, since the release rides on a
+  poll.
+
 ## Added
 
 **Air conditioner**

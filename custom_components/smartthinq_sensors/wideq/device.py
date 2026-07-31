@@ -49,6 +49,11 @@ LOCAL_LANG_PACK = {
 }
 
 MIN_TIME_BETWEEN_CLI_REFRESH = 10  # seconds
+# How long a V1 device's control permission is kept after a command, so that a
+# burst of commands does not reacquire it repeatedly. It is released by the
+# first poll after this elapses - while held, no other client (notably the
+# ThinQ app) can control the device.
+CONTROL_PERMISSION_GRACE = 60  # seconds
 MAX_RETRIES = 3
 MAX_UPDATE_FAIL_ALLOWED = 10
 MAX_INVALID_CREDENTIAL_ERR = 3
@@ -425,6 +430,7 @@ class Device:
         self._should_poll = device_info.platform_type == PlatformType.THINQ1
         self._mon = Monitor(client, device_info)
         self._control_set = 0
+        self._control_set_time: datetime | None = None
         self._last_additional_poll: datetime | None = None
         self._available_features = {}
 
@@ -596,14 +602,30 @@ class Device:
             return
 
         if self._should_poll:
-            await self._client.session.set_device_controls(
-                self._device_info.device_id,
-                ctrl_key,
-                command,
-                {key: value} if key and value else value,
-                {key: data} if key and data else data,
-            )
+            device_id = self._device_info.device_id
+            ctrl_value = {key: value} if key and value else value
+            ctrl_data = {key: data} if key and data else data
+            # Assume the permission is taken the moment a command is issued, so
+            # that a command failing part way through still schedules a release
+            # rather than leaking the lock.
             self._control_set = 2
+            self._control_set_time = datetime.now(timezone.utc)
+            try:
+                await self._client.session.set_device_controls(
+                    device_id, ctrl_key, command, ctrl_value, ctrl_data
+                )
+            except core_exc.ControlPermissionError:
+                # A stale permission - typically left behind by the ThinQ app
+                # quitting without releasing it - locks this device out of all
+                # control until it is cleared. The app clears it the same way.
+                _LOGGER.debug(
+                    "Device %s reported control permission in use, releasing it and retrying",
+                    device_id,
+                )
+                await self._client.session.delete_permission(device_id)
+                await self._client.session.set_device_controls(
+                    device_id, ctrl_key, command, ctrl_value, ctrl_data
+                )
             return
 
         await self._client.session.device_v2_controls(
@@ -709,9 +731,15 @@ class Device:
             return
         if self._control_set <= 0:
             return
-        if self._control_set == 1:
-            await self._client.session.delete_permission(self._device_info.device_id)
-        self._control_set -= 1
+        if self._control_set_time is not None:
+            elapsed = (
+                datetime.now(timezone.utc) - self._control_set_time
+            ).total_seconds()
+            if elapsed < CONTROL_PERMISSION_GRACE:
+                return
+        await self._client.session.delete_permission(self._device_info.device_id)
+        self._control_set = 0
+        self._control_set_time = None
 
     async def _pre_update_v2(self):
         """
