@@ -386,6 +386,15 @@ class DeviceNotInitialized(Exception):
     """Device exception occurred when device is not initialized."""
 
 
+# Smart Diagnosis. LG mixes live findings in with canned filler: "M" is a
+# maintenance advisory raised only while a condition is actually present, "R"
+# is advice to go and check something and "T" is a static tip. Only "M" (and a
+# failing logic script) says anything is wrong right now.
+SDS_PATH = "service/devices/{device_id}/wifi-diag"
+SDS_LIVE_TYPE = "M"
+SDS_NO_FAULT = "0000"
+
+
 class Device:
     """
     A higher-level interface to a specific device.
@@ -472,6 +481,40 @@ class Device:
         if not self._model_info:
             return None
         return self._status
+
+    async def smart_diagnosis(self) -> dict:
+        """Run LG Smart Diagnosis and return only what it actually found."""
+        device_id = self._device_info.device_id
+        res = await self._client.session.post2(
+            SDS_PATH.format(device_id=device_id), {"deviceId": device_id}
+        )
+
+        issues: list[str] = []
+        notes: list[str] = []
+        suppressed = 0
+        for item in res.get("maintenance") or []:
+            if item.get("type") != SDS_LIVE_TYPE:
+                suppressed += 1
+                continue
+            script = (item.get("script") or "").strip()
+            if not script:
+                continue
+            headline = script.splitlines()[0].strip().rstrip(".")
+            issues.append(headline)
+            notes.append(" ".join(script.split()))
+
+        for entry in res.get("logicScript") or []:
+            if entry.get("returnCode") in (None, SDS_NO_FAULT):
+                continue
+            if title := entry.get("title"):
+                issues.append(title.strip().rstrip("."))
+
+        return {
+            "issues": issues,
+            "notes": notes,
+            "suppressed_tips": suppressed,
+            "result_code": res.get("resultCode"),
+        }
 
     def reset_status(self):
         """Reset the status objevt associated to the device."""
