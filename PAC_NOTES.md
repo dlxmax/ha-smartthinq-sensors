@@ -98,12 +98,18 @@ Handling, mirroring the app:
 - `Device.release_control_permission()` runs from `async_unload_entry`. A permission left
   behind at shutdown is unrecoverable - the next session cannot release the previous
   session's lock - and would block both the ThinQ app and our own next start.
-- The permission is held for `CONTROL_PERMISSION_GRACE` (60 s) after a command and
-  released by the first poll after that. It used to be released on the *second poll*
-  after a command, which at this fork's 300 s scan interval meant holding the device
-  hostage for up to ten minutes — a side effect of raising the interval from upstream's
-  30 s. Worst case is still bounded by one poll interval, since the release rides on a
-  poll.
+- The permission is handed back **immediately** after a command. The exclusion is
+  symmetric and the app surfaces it: while Home Assistant holds the permission, the
+  ThinQ app tells the user the device is being controlled elsewhere. Holding it buys
+  nothing, since the next command reacquires it implicitly. `CONTROL_PERMISSION_GRACE`
+  (60 s) survives only as a backstop for a release that failed, applied by the next
+  poll. It used to be released on the *second poll* after a command, so raising the
+  scan interval to 300 s stretched a hold upstream had sized for 30 s polls into as
+  much as ten minutes of locking the app out.
+- Config reads take the permission too — `_get_config` goes out over `rti/rtiControl`,
+  which is how `get_power()` and `get_filter_state()` fetch instant power and filter
+  life. Those run inside `_additional_poll` and are released at the end of the same
+  poll, so they hold it only briefly.
 
 ## Added
 
