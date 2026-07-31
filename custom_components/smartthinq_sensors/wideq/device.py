@@ -49,10 +49,10 @@ LOCAL_LANG_PACK = {
 }
 
 MIN_TIME_BETWEEN_CLI_REFRESH = 10  # seconds
-# How long a V1 device's control permission is kept after a command, so that a
-# burst of commands does not reacquire it repeatedly. It is released by the
-# first poll after this elapses - while held, no other client (notably the
-# ThinQ app) can control the device.
+# Backstop for a V1 control permission that could not be handed back straight
+# after a command: the first poll this long afterwards releases it. While it is
+# held, the ThinQ app reports the device as controlled elsewhere, so the normal
+# path releases immediately rather than waiting for this.
 CONTROL_PERMISSION_GRACE = 60  # seconds
 MAX_RETRIES = 3
 MAX_UPDATE_FAIL_ALLOWED = 10
@@ -649,6 +649,11 @@ class Device:
                 await self._client.session.set_device_controls(
                     device_id, ctrl_key, command, ctrl_value, ctrl_data
                 )
+            # Hand the permission straight back. Holding it gains nothing - the
+            # next command reacquires it implicitly - and for as long as we do,
+            # the ThinQ app tells the user the device is controlled elsewhere.
+            # If this fails, the grace period below is the backstop.
+            await self.release_control_permission()
             return
 
         await self._client.session.device_v2_controls(
