@@ -86,9 +86,18 @@ Handling, mirroring the app:
 
 - `0011` maps to `ControlPermissionError` via `API1_ERRORS`, checked before `API2_ERRORS`
   since the two namespaces reuse numbers for unrelated conditions.
-- `Device._set_control` catches it, calls `delete_permission()` and retries once. The
-  release payload is `{"deviceId": ...}` with no client identity, so it clears whatever
-  permission is on the device, not only one owned by this session.
+- `rti/delControlPermission` releases **only a permission held by the calling session**,
+  despite a payload of just `{"deviceId": ...}`. A lock held by another client cannot be
+  broken remotely; whoever holds it has to let go. Confirmed on hardware - with the app
+  sitting on the device page, a release plus retry still came back `0011`.
+- `Device._set_control` therefore retries only when it was already holding a permission,
+  which may be a stale one of its own. Otherwise the holder is someone else and it fails
+  immediately rather than spending another call on an API that rate limits hard. The
+  error text is replaced with something actionable, keeping the server's string in
+  `server_message`.
+- `Device.release_control_permission()` runs from `async_unload_entry`. A permission left
+  behind at shutdown is unrecoverable - the next session cannot release the previous
+  session's lock - and would block both the ThinQ app and our own next start.
 - The permission is held for `CONTROL_PERMISSION_GRACE` (60 s) after a command and
   released by the first poll after that. It used to be released on the *second poll*
   after a command, which at this fork's 300 s scan interval meant holding the device
