@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from copy import deepcopy
 from enum import IntEnum
@@ -18,6 +19,8 @@ from ..device_info import DeviceInfo, DeviceType
 STATE_WM_POWER_OFF = "STATE_POWER_OFF"
 STATE_WM_INITIAL = "STATE_INITIAL"
 STATE_WM_PAUSE = "STATE_PAUSE"
+STATE_WM_RINSEHOLD = "STATE_RINSEHOLD"
+STATE_WM_PAUSED = [STATE_WM_PAUSE, STATE_WM_RINSEHOLD]
 STATE_WM_END = ["STATE_END", "STATE_COMPLETE"]
 STATE_WM_ERROR_OFF = "OFF"
 STATE_WM_ERROR_NO_ERROR = [
@@ -40,6 +43,32 @@ CMD_REMOTE_START = [
     ["OperationStart", "WMStart"],
     ["Start", "WMStart"],
 ]
+
+# LG ships this model's smart course descriptions as untranslated stubs
+# ("Script eco wash"). The same courses carry real copy under the shared KR
+# front-load keys, so read the description from there when we have a match.
+COURSE_SCRIPT_ALIASES = {
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_SKIN_CARE": "@WM_KR_FL_SMARTCOURSE_SKIN_CARE_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_SWEAT_STAIN_W": "@WM_KR_FL_SMARTCOURSE_SWEAT_SPOT_REMOVE_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_SCHOOL_UNIFORM": "@WM_KR_FL_SMARTCOURSE_SCHOOL_UNIFORM_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_STATIC_REMOVAL": "@WM_KR_FL_SMARTCOURSE_STATIC_REMOVE_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_SPIN_ONLY": "@WM_KR_FL_SMARTCOURSE_SPIN_ONLY_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_DEODORIZATION_S": "@WM_KR_FL_SMARTCOURSE_DEODORIZATION_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_CLOTH_CARE_S": "@WM_KR_FL_SMARTCOURSE_CLOTHES_PROTECT_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_SMART_RINSE_S": "@WM_KR_FL_SMARTCOURSE_SMART_RINSE_SCRIPT_S",
+    "@WM_KR_TT27_WD_WIFI_SMARTCOURSE_SCRIPT_ECO_WASH_S": "@WM_KR_FL_SMARTCOURSE_SCRIPT_ECO_WASH_S",
+}
+
+CMD_COURSE_DOWNLOAD = "CourseDownload"
+
+# ThinQ1 course download uses dedicated APIv1 endpoints rather than rtiControl.
+DL_PATH_UPDATE = "washer/courseUpdate"
+DL_PATH_WORKLIST = "washer/workList"
+DL_PATH_DELETE = "washer/deleteDeviceCourse"
+DL_WORK_COMPLETED = "C"
+DL_WORK_FAILED = ["A", "E", "O"]
+DL_POLL_INTERVAL = 1
+DL_POLL_COUNT = 20
 
 VT_CTRL_CMD = {
     "WMOff": {"cmd": "power", "type": "ABSOLUTE", "value": "POWER_OFF"},
@@ -125,6 +154,7 @@ class WMDevice(Device):
         self._course_keys: dict[CourseType, str | None] | None = None
         self._course_infos: dict[str, str] | None = None
         self._selected_course: str | None = None
+        self._download_course_infos: dict[str, str] | None = None
         self._is_cycle_finishing = False
         self._stand_by = False
         self._remote_start_status: dict | None = None
@@ -354,6 +384,210 @@ class WMDevice(Device):
         if courses := self.model_info.reference_values(course_key):
             return courses.get(course_id)
         return None
+
+    def _course_display_name(self, course_info: dict, course_id: str) -> str:
+        """Return the translated name for a course definition."""
+        if enum_name := course_info.get("name"):
+            name = self.get_enum_text(enum_name)
+            if name != enum_name:
+                return name
+        # No language pack entry: the model JSON comment is the local name.
+        return course_info.get("_comment", course_id)
+
+    def _course_description(self, script_key: str | None) -> str | None:
+        """Return a course description, avoiding LG's untranslated stubs."""
+        if not script_key:
+            return None
+        for key in (COURSE_SCRIPT_ALIASES.get(script_key), script_key):
+            if not key:
+                continue
+            text = self.get_enum_text(key)
+            if text and text != key:
+                return text
+        return None
+
+    def _get_download_course_infos(self) -> dict:
+        """Return a dict of smart courses that can be downloaded."""
+        if self._download_course_infos is not None:
+            return self._download_course_infos
+
+        ret_val = {}
+        if self.model_info.get_control_cmd(CMD_COURSE_DOWNLOAD):
+            course_key = self.get_course_key(CourseType.SMARTCOURSE)
+            for key, value in (self.model_info.reference_values(course_key) or {}).items():
+                if value.get("downloadEnable") is False:
+                    continue
+                ret_val[self._course_display_name(value, key)] = key
+
+        self._download_course_infos = ret_val
+        return ret_val
+
+    @property
+    def download_course_list(self) -> list:
+        """Return a list of downloadable smart courses."""
+        return list(self._get_download_course_infos())
+
+    @property
+    def downloaded_course(self) -> str | None:
+        """Return the course currently stored in the appliance download slot."""
+        if not (self._status and (data := self._status.as_dict)):
+            return None
+        if not (course_key := self.get_course_key(CourseType.SMARTCOURSE)):
+            return None
+        # Resolve the name the same way the option list does, so that the
+        # reported state always matches one of the offered options.
+        course_id = str(data.get(course_key))
+        if not (course_info := self._get_course_details(course_key, course_id)):
+            return None
+        return self._course_display_name(course_info, course_id)
+
+    @property
+    def download_course_enabled(self) -> bool:
+        """Return if a course can be downloaded right now.
+
+        Mirrors the checks the app performs before enabling its download
+        button: appliance awake, no child lock, no error and not mid-cycle.
+        """
+        if not (self._status and self._status.is_on):
+            return False
+        if self._status.is_error:
+            return False
+        # Bit features are "on"/"off" strings, so compare explicitly.
+        if (
+            self._status.device_features.get(WashDeviceFeatures.CHILDLOCK)
+            == StateOptions.ON
+        ):
+            return False
+
+        run_state = self.run_state
+        if STATE_WM_INITIAL in run_state:
+            return True
+        # A paused cycle only accepts a new course when the model allows it.
+        if self.model_info.config_value("changeCourseInPause"):
+            return any(state in run_state for state in STATE_WM_PAUSED)
+        return False
+
+    def download_course_attributes(self) -> dict:
+        """Return the app's course details, keyed by course name."""
+        ret_val = {}
+        course_key = self.get_course_key(CourseType.SMARTCOURSE)
+        categories = {}
+        for category in self.model_info.config_value("SmartCourseCategory") or []:
+            label = self.get_enum_text(category.get("label"))
+            for course_id in category.get("courseIdList") or []:
+                categories[str(course_id)] = label
+
+        for name, course_id in self._get_download_course_infos().items():
+            if not (course_info := self._get_course_details(course_key, course_id)):
+                continue
+            options = {}
+            for func_key in course_info.get("function") or []:
+                if not (opt_key := func_key.get("value")):
+                    continue
+                opt_val = func_key.get("default")
+                enum_name = self.model_info.enum_name(opt_key, opt_val)
+                options[opt_key] = (
+                    self.get_enum_text(enum_name) if enum_name else opt_val
+                )
+            details = {"id": course_id, "options": options}
+            if category := categories.get(str(course_id)):
+                details["category"] = category
+            if description := self._course_description(course_info.get("script")):
+                details["description"] = description
+            ret_val[name] = details
+
+        # Flat copies for the loaded course: the UI only renders scalars.
+        if current := self.downloaded_course:
+            if details := ret_val.get(current):
+                if description := details.get("description"):
+                    ret_val["description"] = description
+                if category := details.get("category"):
+                    ret_val["category"] = category
+                if settings := details.get("options"):
+                    ret_val["settings"] = ", ".join(
+                        f"{key}: {val}" for key, val in settings.items()
+                    )
+
+        return ret_val
+
+    def _make_download_course_data(self, course_id: str, course_info: dict) -> str:
+        """Build the base64 payload sent for a course download."""
+        cmd = self.model_info.get_control_cmd(CMD_COURSE_DOWNLOAD)
+        if not (template := (cmd or {}).get("data")):
+            raise ValueError("Course download not supported by this device")
+        if not (self._status and (data := self._status.as_dict)):
+            raise ValueError("Course info not available")
+
+        course_data = self._prepare_course_info(
+            data,
+            course_id,
+            course_info,
+            CourseType.SMARTCOURSE,
+            False,
+            self.get_course_key(CourseType.COURSE),
+            self.get_course_key(CourseType.SMARTCOURSE),
+        )
+
+        str_data = template
+        for dt_key, dt_value in course_data.items():
+            repl_key = f"{{{{{dt_key}}}}}"
+            if repl_key in str_data:
+                str_data = str_data.replace(repl_key, str(dt_value))
+        _LOGGER.debug("Course download data content: %s", str_data)
+
+        return base64.b64encode(bytes(json.loads(str_data))).decode("ascii")
+
+    async def _wait_download_completed(self, work_id: str) -> None:
+        """Poll the work list until the appliance confirms the download."""
+        for _ in range(DL_POLL_COUNT):
+            await asyncio.sleep(DL_POLL_INTERVAL)
+            res = await self._client.session.post(
+                DL_PATH_WORKLIST,
+                {"deviceId": self._device_info.device_id, "workId": work_id},
+            )
+            status = (res.get("item") or {}).get("status")
+            if status == DL_WORK_COMPLETED:
+                return
+            if status in DL_WORK_FAILED:
+                raise InvalidDeviceStatus(
+                    f"Course download rejected by device (status: {status})"
+                )
+        _LOGGER.warning(
+            "Course download not confirmed by device within %s seconds",
+            DL_POLL_COUNT * DL_POLL_INTERVAL,
+        )
+
+    async def download_course(self, course_name: str) -> None:
+        """Download a smart course to the appliance download slot."""
+        if not self.download_course_enabled:
+            raise InvalidDeviceStatus()
+
+        course_infos = self._get_download_course_infos()
+        if course_name not in course_infos:
+            raise ValueError(f"Invalid course: {course_name}")
+
+        course_id = course_infos[course_name]
+        course_key = self.get_course_key(CourseType.SMARTCOURSE)
+        if not (course_info := self._get_course_details(course_key, course_id)):
+            raise ValueError("Course info not available")
+
+        data = self._make_download_course_data(course_id, course_info)
+        # The appliance expects the payload wrapped in the tags declared by
+        # ControlWifi.action.CourseDownload, base64 encoded as a whole.
+        course_xml = f"<COURSE><ID>{course_id}</ID><DATA>{data}</DATA></COURSE>"
+        res = await self._client.session.post(
+            DL_PATH_UPDATE,
+            {
+                "deviceId": self._device_info.device_id,
+                "selectedCd": str(course_id),
+                "courseData": base64.b64encode(
+                    course_xml.encode("utf-8")
+                ).decode("ascii"),
+            },
+        )
+
+        if work_id := res.get("workId"):
+            await self._wait_download_completed(work_id)
 
     def _prepare_course_info(
         self,
