@@ -44,6 +44,10 @@ class ThinQSwitchEntityDescription(SwitchEntityDescription):
     turn_off_fn: Callable[[Any], Awaitable[None]] | None = None
     turn_on_fn: Callable[[Any], Awaitable[None]] | None = None
     value_fn: Callable[[Any], bool] | None = None
+    # Set for controls the appliance accepts but never reports back. Their state
+    # is only ever a guess, so it must not be used to decide whether to send a
+    # command: after a restart the guess is wrong and the command is what counts.
+    assumed_state: bool = False
 
 
 WASH_DEV_SWITCH: tuple[ThinQSwitchEntityDescription, ...] = (
@@ -148,6 +152,7 @@ AC_SWITCH: tuple[ThinQSwitchEntityDescription, ...] = (
         icon="mdi:wall-sconce-round",
         turn_off_fn=lambda x: x.device.set_lighting_display(False),
         turn_on_fn=lambda x: x.device.set_lighting_display(True),
+        assumed_state=True,
     ),
     ThinQSwitchEntityDescription(
         key=AirConditionerFeatures.MODE_AWHP_SILENT,
@@ -297,11 +302,16 @@ class LGESwitch(LGEBaseSwitch):
             is_avail = self.entity_description.available_fn(self._wrap_device)
         return self._api.available and is_avail
 
+    @property
+    def assumed_state(self) -> bool:
+        """Return True when the appliance never reports this control back."""
+        return self.entity_description.assumed_state
+
     async def async_turn_off(self, **kwargs):
         """Turn the entity off."""
         if self.entity_description.turn_off_fn is None:
             raise NotImplementedError()
-        if self.is_on:
+        if self.is_on or self.assumed_state:
             await self.entity_description.turn_off_fn(self._wrap_device)
             self._api.async_set_updated()
 
@@ -309,7 +319,7 @@ class LGESwitch(LGEBaseSwitch):
         """Turn the entity on."""
         if self.entity_description.turn_on_fn is None:
             raise NotImplementedError()
-        if not self.is_on:
+        if not self.is_on or self.assumed_state:
             await self.entity_description.turn_on_fn(self._wrap_device)
             self._api.async_set_updated()
 
