@@ -27,7 +27,7 @@ from .const import (
     DEFAULT_SENSOR,
 )
 from .wideq import WM_DEVICE_TYPES, DeviceType, StateOptions, TemperatureUnit
-from .wideq.core_exceptions import APIError, ControlPermissionError
+from .wideq.core_exceptions import APIError
 
 STATE_LOOKUP = {
     StateOptions.OFF: STATE_OFF,
@@ -71,18 +71,9 @@ def handle_api_errors(func):
     """
 
     @wraps(func)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(*args, **kwargs):
         try:
-            return await func(self, *args, **kwargs)
-        except ControlPermissionError as exc:
-            # Refused because another client is driving the device right now,
-            # which makes this the moment our cached state is most likely to be
-            # wrong - it has been changing it without us seeing. Re-read before
-            # reporting, so a refused command does not also leave a stale value
-            # on screen until the next poll. The read does not need the
-            # permission, and the coordinator debounces the request.
-            await self.coordinator.async_request_refresh()
-            raise HomeAssistantError(str(exc)) from exc
+            return await func(*args, **kwargs)
         except APIError as exc:
             raise HomeAssistantError(str(exc)) from exc
 
