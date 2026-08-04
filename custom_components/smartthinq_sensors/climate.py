@@ -79,6 +79,13 @@ PRESET_MODE_LOOKUP: dict[str, dict[str, HVACMode]] = {
     ACMode.ENERGY_SAVER.name: {"preset": PRESET_ECO, "hvac": HVACMode.COOL},
 }
 
+# Synthesised presets that the appliance only accepts in some hvac modes.
+# IceValley (BOOST) is a wind mode of the cooling circuit, so it is meaningless
+# in dry or fan-only. Presets absent from this map are valid in every mode.
+EXTRA_PRESET_HVAC_MODES: dict[str, tuple[HVACMode, ...]] = {
+    PRESET_BOOST: (HVACMode.COOL,),
+}
+
 DEFAULT_AC_FEATURES = (
     ClimateEntityFeature.TARGET_TEMPERATURE
     | ClimateEntityFeature.TURN_OFF
@@ -229,6 +236,14 @@ class LGEACClimate(LGEClimate):
         self._hvac_mode_lookup: dict[str, HVACMode] | None = None
         self._preset_mode_lookup: dict[str, str] | None = None
 
+        # The appliance keeps a separate target temperature per operation mode,
+        # but THINQ1 only ever reports one TempCfg, so the recalled value cannot
+        # be read back. Mirror the appliance's memory here and re-assert it on a
+        # mode change, otherwise HA displays a setpoint the compressor is not
+        # using. Same for the synthesised presets, which the unit drops on a
+        # mode change while the cloud keeps echoing the old value.
+        self._mode_target_temp: dict[HVACMode, float] = {}
+
     def _available_hvac_modes(self) -> dict[str, HVACMode]:
         """Return available hvac modes from lookup dict."""
         if self._hvac_mode_lookup is None:
@@ -316,10 +331,39 @@ class LGEACClimate(LGEClimate):
         if (operation_mode := reverse_lookup.get(hvac_mode)) is None:
             raise ValueError(f"Invalid hvac_mode [{hvac_mode}]")
 
+        # Remember where the mode we are leaving was set, so returning to it
+        # restores the same setpoint the appliance itself would recall.
+        prev_mode = self.hvac_mode
+        if prev_mode not in (HVACMode.OFF, hvac_mode):
+            if (prev_temp := self._api.state.target_temp) is not None:
+                self._mode_target_temp[prev_mode] = prev_temp
+
+        # A preset only survives the switch if it is valid in the new mode. One
+        # that is not (BOOST outside cool) is cleared explicitly, or the cloud
+        # would keep echoing it back after the appliance has dropped it.
+        keep_preset = drop_preset = None
+        if extra := self._extra_presets:
+            curr_preset = self.preset_mode
+            if curr_preset in extra:
+                if curr_preset in self._extra_presets_for_mode(hvac_mode):
+                    keep_preset = curr_preset
+                else:
+                    drop_preset = curr_preset
+
         if not self._api.state.is_on:
             await self._device.power(True)
         if operation_mode != HVAC_MODE_NONE:
             await self._device.set_op_mode(operation_mode)
+
+        # Re-assert both, because the cloud echoes stale values for each and the
+        # appliance does not carry them across a mode change.
+        if (new_temp := self._mode_target_temp.get(hvac_mode)) is not None:
+            await self._device.set_target_temp(new_temp)
+        if drop_preset is not None:
+            await extra[drop_preset][1](False)
+        if keep_preset is not None:
+            await extra[keep_preset][1](True)
+
         self._api.async_set_updated()
 
     @property
@@ -332,8 +376,13 @@ class LGEACClimate(LGEClimate):
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode."""
         if extra := self._extra_presets:
-            if preset_mode != PRESET_NONE and preset_mode not in extra:
-                raise ValueError(f"Invalid preset_mode [{preset_mode}]")
+            if preset_mode != PRESET_NONE and preset_mode not in (
+                self._extra_presets_for_mode(self.hvac_mode)
+            ):
+                raise ValueError(
+                    f"Invalid preset_mode [{preset_mode}] for hvac mode"
+                    f" [{self.hvac_mode}]"
+                )
             if not self._api.state.is_on and preset_mode != PRESET_NONE:
                 await self._device.power(True)
             # Only one synthesised preset may be active at a time. Turning the
@@ -400,13 +449,29 @@ class LGEACClimate(LGEClimate):
             return PRESET_NONE
         return self._attr_preset_mode
 
+    @staticmethod
+    def _preset_hvac_modes(preset_mode: str) -> tuple[HVACMode, ...] | None:
+        """Return the hvac modes a synthesised preset is valid in, None if all."""
+        return EXTRA_PRESET_HVAC_MODES.get(preset_mode)
+
+    def _extra_presets_for_mode(self, hvac_mode: HVACMode) -> dict:
+        """Return the synthesised presets the appliance accepts in this mode."""
+        return {
+            name: value
+            for name, value in self._extra_presets.items()
+            if (valid := self._preset_hvac_modes(name)) is None or hvac_mode in valid
+        }
+
     @property
     def preset_modes(self) -> list[str] | None:
         """Return the list of available preset modes."""
         modes = self._available_preset_modes()
         if not modes:
-            if extra := self._extra_presets:
-                return [PRESET_NONE] + list(extra)
+            if self._extra_presets:
+                # Offer only what the current mode actually accepts, so e.g.
+                # BOOST is not presented while the unit is in dry.
+                current = self._extra_presets_for_mode(self.hvac_mode)
+                return [PRESET_NONE] + list(current)
             return None
         return [PRESET_NONE] + list(modes.values())
 
@@ -434,6 +499,9 @@ class LGEACClimate(LGEClimate):
 
         if (new_temp := kwargs.get(ATTR_TEMPERATURE)) is not None:
             await self._device.set_target_temp(new_temp)
+            # Mirror the appliance's per-mode setpoint memory (see __init__).
+            if (curr_mode := self.hvac_mode) != HVACMode.OFF:
+                self._mode_target_temp[curr_mode] = new_temp
             self._api.async_set_updated()
 
     @property
