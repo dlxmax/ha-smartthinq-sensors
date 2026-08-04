@@ -296,7 +296,9 @@ async def async_update_history(hass: HomeAssistant, api: Any) -> None:
 
     if totals:
         device.set_history(totals)
-        api.async_set_updated()
+        # Locally computed totals, not the echo of a command: nothing for the
+        # appliance to confirm, so do not trigger the post-command polls.
+        api.async_set_updated(poll_after=False)
 
 
 @callback
