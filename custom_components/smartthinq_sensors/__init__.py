@@ -45,6 +45,7 @@ from .const import (
     MIN_HA_MAJ_VER,
     MIN_HA_MIN_VER,
     POST_COMMAND_POLL_COUNT,
+    POST_COMMAND_POLL_FIRST_DELAY,
     POST_COMMAND_POLL_INTERVAL,
     STARTUP,
     __min_ha_version__,
@@ -432,6 +433,7 @@ class LGEDevice:
         self._known_features: set[str] | None = None
         self._confirm_poll_unsub: Callable[[], None] | None = None
         self._confirm_polls_left = 0
+        self._confirm_poll_gen = 0
 
     @property
     def available(self) -> bool:
@@ -537,6 +539,12 @@ class LGEDevice:
         The optimistic state we just published is what we asked for, not what
         the appliance did. On V2 the cloud pushes the real value back on its
         own, so this only runs for V1.
+
+        A burst is identified by a generation number rather than only by its
+        timer handle. A tick that is already awaiting its poll cannot be
+        cancelled, and it outlives the burst it belongs to; without the
+        generation it would wake up, re-arm itself and overwrite the handle of
+        whichever burst replaced it, leaving timers nothing can stop.
         """
         if self._device.device_info.platform_type != PlatformType.THINQ1:
             return
@@ -545,25 +553,38 @@ class LGEDevice:
 
         self.cancel_confirm_polls()
         self._confirm_polls_left = POST_COMMAND_POLL_COUNT
+        generation = self._confirm_poll_gen
 
         async def _confirm_poll(_now) -> None:
+            if generation != self._confirm_poll_gen:
+                return
             self._confirm_poll_unsub = None
             self._confirm_polls_left -= 1
-            # async_refresh, not async_request_refresh: the coordinator's
-            # debouncer would collapse the whole burst into a single poll.
-            await self._coordinator.async_refresh()
+
+            # The appliance answers one caller at a time, and a poll holds it
+            # for as long as it takes. Skipping while a command is in flight
+            # keeps a confirmation from delaying the thing it is confirming;
+            # that command schedules its own burst anyway.
+            if not self._device.session_busy:
+                # async_refresh, not async_request_refresh: the coordinator's
+                # debouncer would collapse the whole burst into a single poll.
+                await self._coordinator.async_refresh()
+
+            if generation != self._confirm_poll_gen:
+                return
             if self._confirm_polls_left > 0:
                 self._confirm_poll_unsub = async_call_later(
                     self._hass, POST_COMMAND_POLL_INTERVAL, _confirm_poll
                 )
 
         self._confirm_poll_unsub = async_call_later(
-            self._hass, POST_COMMAND_POLL_INTERVAL, _confirm_poll
+            self._hass, POST_COMMAND_POLL_FIRST_DELAY, _confirm_poll
         )
 
     @callback
     def cancel_confirm_polls(self):
         """Stop any confirm poll burst still in flight."""
+        self._confirm_poll_gen += 1
         if self._confirm_poll_unsub is not None:
             self._confirm_poll_unsub()
             self._confirm_poll_unsub = None

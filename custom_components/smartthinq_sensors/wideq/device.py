@@ -433,6 +433,11 @@ class Device:
         self._control_set_time: datetime | None = None
         self._last_additional_poll: datetime | None = None
         self._available_features = {}
+        # A V1 appliance answers one caller at a time. Overlap a status poll
+        # with a command and the command comes back "제품 응답 지연", so the two
+        # take turns. The ThinQ app gets this for free: its monitoring loop and
+        # its controls are the same session.
+        self._session_lock = asyncio.Lock()
 
         # attributes for properties
         self._attr_unique_id = self._device_info.device_id
@@ -453,6 +458,11 @@ class Device:
     def device_info(self) -> DeviceInfo:
         """Return 'device_info' for this device."""
         return self._device_info
+
+    @property
+    def session_busy(self) -> bool:
+        """Return True while a command or poll holds the appliance's session."""
+        return self._session_lock.locked()
 
     @property
     def unique_id(self) -> str:
@@ -602,58 +612,8 @@ class Device:
             return
 
         if self._should_poll:
-            device_id = self._device_info.device_id
-            ctrl_value = {key: value} if key and value else value
-            ctrl_data = {key: data} if key and data else data
-            held_permission = self._control_set > 0
-            # Assume the permission is taken the moment a command is issued, so
-            # that a command failing part way through still schedules a release
-            # rather than leaking the lock.
-            self._control_set = 2
-            self._control_set_time = datetime.now(timezone.utc)
-            try:
-                await self._client.session.set_device_controls(
-                    device_id, ctrl_key, command, ctrl_value, ctrl_data
-                )
-            except core_exc.ControlPermissionError:
-                # Refused, so no permission was taken.
-                self._control_set = 0
-                self._control_set_time = None
-                # delControlPermission only releases a permission held by this
-                # session. Retrying is worth it when we were holding one, since
-                # it may be stale; when we were not, the holder is another
-                # client and only it can release, so fail without spending a
-                # further call on an API that rate limits hard.
-                if not held_permission:
-                    raise
-                _LOGGER.debug(
-                    "Device %s refused control, dropping our permission and retrying",
-                    device_id,
-                )
-                await self._client.session.delete_permission(device_id)
-                await self._client.session.set_device_controls(
-                    device_id, ctrl_key, command, ctrl_value, ctrl_data
-                )
-                self._control_set = 2
-                self._control_set_time = datetime.now(timezone.utc)
-            except core_exc.DelayedResponseError:
-                # "제품 응답 지연" - the device did not answer in time. Seen when
-                # another client is mid-session with it, and it clears on a
-                # second attempt. Not a permission problem: the app shows this
-                # one without releasing anything, so neither do we. Commands are
-                # absolute value sets, so repeating one is harmless.
-                _LOGGER.debug(
-                    "Device %s did not answer command in time, retrying", device_id
-                )
-                await asyncio.sleep(SLEEP_BETWEEN_RETRIES)
-                await self._client.session.set_device_controls(
-                    device_id, ctrl_key, command, ctrl_value, ctrl_data
-                )
-            # Hand the permission straight back. Holding it gains nothing - the
-            # next command reacquires it implicitly - and for as long as we do,
-            # the ThinQ app tells the user the device is controlled elsewhere.
-            # If this fails, the grace period below is the backstop.
-            await self.release_control_permission()
+            async with self._session_lock:
+                await self._set_control_v1(ctrl_key, command, key, value, data)
             return
 
         await self._client.session.device_v2_controls(
@@ -664,6 +624,65 @@ class Device:
             value,
             ctrl_path=ctrl_path,
         )
+
+    async def _set_control_v1(self, ctrl_key, command, key, value, data):
+        """Send one control command to a V1 appliance.
+
+        Caller holds `_session_lock`: everything here shares the appliance's
+        single session, including the permission release at the end.
+        """
+        device_id = self._device_info.device_id
+        ctrl_value = {key: value} if key and value else value
+        ctrl_data = {key: data} if key and data else data
+        held_permission = self._control_set > 0
+        # Assume the permission is taken the moment a command is issued, so
+        # that a command failing part way through still schedules a release
+        # rather than leaking the lock.
+        self._control_set = 2
+        self._control_set_time = datetime.now(timezone.utc)
+        try:
+            await self._client.session.set_device_controls(
+                device_id, ctrl_key, command, ctrl_value, ctrl_data
+            )
+        except core_exc.ControlPermissionError:
+            # Refused, so no permission was taken.
+            self._control_set = 0
+            self._control_set_time = None
+            # delControlPermission only releases a permission held by this
+            # session. Retrying is worth it when we were holding one, since
+            # it may be stale; when we were not, the holder is another
+            # client and only it can release, so fail without spending a
+            # further call on an API that rate limits hard.
+            if not held_permission:
+                raise
+            _LOGGER.debug(
+                "Device %s refused control, dropping our permission and retrying",
+                device_id,
+            )
+            await self._client.session.delete_permission(device_id)
+            await self._client.session.set_device_controls(
+                device_id, ctrl_key, command, ctrl_value, ctrl_data
+            )
+            self._control_set = 2
+            self._control_set_time = datetime.now(timezone.utc)
+        except core_exc.DelayedResponseError:
+            # "제품 응답 지연" - the device did not answer in time. Seen when
+            # another client is mid-session with it, and it clears on a
+            # second attempt. Not a permission problem: the app shows this
+            # one without releasing anything, so neither do we. Commands are
+            # absolute value sets, so repeating one is harmless.
+            _LOGGER.debug(
+                "Device %s did not answer command in time, retrying", device_id
+            )
+            await asyncio.sleep(SLEEP_BETWEEN_RETRIES)
+            await self._client.session.set_device_controls(
+                device_id, ctrl_key, command, ctrl_value, ctrl_data
+            )
+        # Hand the permission straight back. Holding it gains nothing - the
+        # next command reacquires it implicitly - and for as long as we do,
+        # the ThinQ app tells the user the device is controlled elsewhere.
+        # If this fails, the grace period below is the backstop.
+        await self.release_control_permission()
 
     def _prepare_command(self, ctrl_key, command, key, value):
         """
@@ -911,21 +930,25 @@ class Device:
             return self._model_info.decode_snapshot(snapshot, snapshot_key)
 
         # ThinQ V1 - Monitor data must be polled """
-        data = None
-        if self._client.emulation:
-            data = await asyncio.to_thread(self._load_emul_v1_payload)
-        if not data:
-            data = await self._mon.refresh()
-        if not data:
-            return None
+        # Take the session for the whole read. A poll issued just after a
+        # command can sit on the appliance for 20 s while it applies the change,
+        # and anything sent in the meantime is refused.
+        async with self._session_lock:
+            data = None
+            if self._client.emulation:
+                data = await asyncio.to_thread(self._load_emul_v1_payload)
+            if not data:
+                data = await self._mon.refresh()
+            if not data:
+                return None
 
-        res = self._model_info.decode_monitor(data)
-        # do additional poll
-        if res and additional_poll_interval_v1 > 0:
-            await self._additional_poll(additional_poll_interval_v1)
+            res = self._model_info.decode_monitor(data)
+            # do additional poll
+            if res and additional_poll_interval_v1 > 0:
+                await self._additional_poll(additional_poll_interval_v1)
 
-        # remove control permission if previously set
-        await self._delete_permission()
+            # remove control permission if previously set
+            await self._delete_permission()
 
         return res
 
