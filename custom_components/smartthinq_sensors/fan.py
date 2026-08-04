@@ -23,7 +23,7 @@ from homeassistant.util.percentage import (
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
-from .device_helpers import handle_api_errors
+from .device_helpers import entity_adder, handle_api_errors
 from .wideq import DeviceType, HoodFeatures, MicroWaveFeatures
 
 ATTR_FAN_MODE = "fan_mode"
@@ -142,6 +142,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up LGE device fan based on config_entry."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -163,7 +164,7 @@ async def async_setup_entry(
             if _fan_exist(lge_device, fan_desc)
         ]
 
-        async_add_entities(lge_fan)
+        add_entities(lge_fan)
 
     _async_discover_device(lge_cfg_devices)
 

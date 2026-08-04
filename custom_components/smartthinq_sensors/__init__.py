@@ -423,6 +423,7 @@ class LGEDevice:
         self._coordinator: DataUpdateCoordinator | None = None
         self._disc_count = 0
         self._available = True
+        self._known_features: set[str] = set()
 
     @property
     def available(self) -> bool:
@@ -504,6 +505,7 @@ class LGEDevice:
 
         # Initialize device features
         _ = self._state.device_features
+        self._known_features = set(self._device.available_features)
 
         return True
 
@@ -585,6 +587,37 @@ class LGEDevice:
             # _LOGGER.debug('Status attributes: %s', l)
             self._disc_count = 0
             self._state = state
+            self._async_discover_late_features()
+
+    @callback
+    def _async_discover_late_features(self) -> None:
+        """Set up entities for features the device only reported later.
+
+        A feature is only known once the appliance has reported a value for
+        it, so the set we have at startup is whatever that first poll
+        happened to return. A poll that comes back empty, or one whose
+        config reads are refused because the ThinQ app holds the V1 control
+        permission, leaves features missing - and every entity gated on one
+        is then never created, with nothing in the log to say so. They stay
+        missing until the next reload, however healthy later polls are.
+
+        So re-run discovery whenever the set grows and let the platforms pick
+        up what is now known. Entities that already exist are filtered out by
+        their unique_id, so this is a no-op once the device has settled.
+        """
+        _ = self._state.device_features
+        features = set(self._device.available_features)
+        if not (new_features := features - self._known_features):
+            return
+
+        self._known_features = features
+        _LOGGER.debug(
+            "Device %s reported %d new feature(s) after setup: %s",
+            self._name,
+            len(new_features),
+            ", ".join(sorted(new_features)),
+        )
+        async_dispatcher_send(self._hass, LGE_DISCOVERY_NEW, {self._type: [self]})
 
 
 async def lge_devices_setup(

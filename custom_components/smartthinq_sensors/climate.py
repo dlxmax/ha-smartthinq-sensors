@@ -33,7 +33,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
-from .device_helpers import TEMP_UNIT_LOOKUP, LGERefrigeratorDevice, handle_api_errors
+from .device_helpers import (
+    TEMP_UNIT_LOOKUP,
+    LGERefrigeratorDevice,
+    entity_adder,
+    handle_api_errors,
+)
 from .wideq import AirConditionerFeatures, DeviceType, TemperatureUnit
 from .wideq.devices.ac import (
     AWHP_MAX_TEMP,
@@ -130,6 +135,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up LGE device climate based on config_entry."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -157,7 +163,7 @@ async def async_setup_entry(
             ]
         )
 
-        async_add_entities(lge_climates)
+        add_entities(lge_climates)
 
     _async_discover_device(lge_cfg_devices)
 

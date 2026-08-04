@@ -16,7 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
-from .device_helpers import handle_api_errors
+from .device_helpers import entity_adder, handle_api_errors
 from .wideq import WM_DEVICE_TYPES, DeviceType, MicroWaveFeatures
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,6 +112,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the LGE selects."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -132,7 +133,7 @@ async def async_setup_entry(
             if _select_exist(lge_device, select_desc)
         ]
 
-        async_add_entities(lge_select)
+        add_entities(lge_select)
 
     _async_discover_device(lge_cfg_devices)
 
