@@ -47,6 +47,15 @@ DEFAULT_SCAN_INTERVAL = 300
 MIN_SCAN_INTERVAL = 30
 MAX_SCAN_INTERVAL = 3600
 
+# After a control command the ThinQ app does not trust the echoed state: it
+# calls setMonitoringInterval(deviceId, 5000, 5), i.e. five extra polls 5 s
+# apart, and only then falls back to its normal cadence. Do the same, so a
+# command's real outcome shows up in ~25 s instead of after a whole
+# DEFAULT_SCAN_INTERVAL. V1 (THINQ1) only, where a poll reuses the cached
+# work_id and costs a single request.
+POST_COMMAND_POLL_INTERVAL = 5
+POST_COMMAND_POLL_COUNT = 5
+
 CLIENT = "client"
 LGE_DEVICES = "lge_devices"
 

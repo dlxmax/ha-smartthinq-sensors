@@ -28,7 +28,7 @@ from homeassistant.helpers.dispatcher import (
     async_dispatcher_send,
 )
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -44,6 +44,8 @@ from .const import (
     LGE_DISCOVERY_NEW,
     MIN_HA_MAJ_VER,
     MIN_HA_MIN_VER,
+    POST_COMMAND_POLL_COUNT,
+    POST_COMMAND_POLL_INTERVAL,
     STARTUP,
     __min_ha_version__,
 )
@@ -63,6 +65,7 @@ from .wideq.core_exceptions import (
 )
 from .history_stats import async_setup_history
 from .wideq.device import Device as ThinQDevice
+from .wideq.device_info import PlatformType
 
 SMARTTHINQ_PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -392,6 +395,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # locks the device for the ThinQ app and for our own next start.
             for devices in data.get(LGE_DEVICES, {}).values():
                 for lge_device in devices:
+                    lge_device.cancel_confirm_polls()
                     await lge_device.device.release_control_permission()
             await client.close()
     return unload_ok
@@ -426,6 +430,8 @@ class LGEDevice:
         # None until setup has finished, so the polls that run during setup do
         # not report every feature the device has as a late arrival.
         self._known_features: set[str] | None = None
+        self._confirm_poll_unsub: Callable[[], None] | None = None
+        self._confirm_polls_left = 0
 
     @property
     def available(self) -> bool:
@@ -512,10 +518,56 @@ class LGEDevice:
         return True
 
     @callback
-    def async_set_updated(self):
-        """Manually update state and notify coordinator entities."""
+    def async_set_updated(self, poll_after: bool = True):
+        """Manually update state and notify coordinator entities.
+
+        `poll_after` schedules the post-command confirm polls. Callers that push
+        a locally computed value rather than the result of a device command pass
+        False, since there is nothing for the appliance to confirm.
+        """
         if self._coordinator:
             self._coordinator.async_set_updated_data(self._state)
+        if poll_after:
+            self._async_schedule_confirm_polls()
+
+    @callback
+    def _async_schedule_confirm_polls(self):
+        """Re-poll a few times after a command, the way the ThinQ app does.
+
+        The optimistic state we just published is what we asked for, not what
+        the appliance did. On V2 the cloud pushes the real value back on its
+        own, so this only runs for V1.
+        """
+        if self._device.device_info.platform_type != PlatformType.THINQ1:
+            return
+        if self._coordinator is None:
+            return
+
+        self.cancel_confirm_polls()
+        self._confirm_polls_left = POST_COMMAND_POLL_COUNT
+
+        async def _confirm_poll(_now) -> None:
+            self._confirm_poll_unsub = None
+            self._confirm_polls_left -= 1
+            # async_refresh, not async_request_refresh: the coordinator's
+            # debouncer would collapse the whole burst into a single poll.
+            await self._coordinator.async_refresh()
+            if self._confirm_polls_left > 0:
+                self._confirm_poll_unsub = async_call_later(
+                    self._hass, POST_COMMAND_POLL_INTERVAL, _confirm_poll
+                )
+
+        self._confirm_poll_unsub = async_call_later(
+            self._hass, POST_COMMAND_POLL_INTERVAL, _confirm_poll
+        )
+
+    @callback
+    def cancel_confirm_polls(self):
+        """Stop any confirm poll burst still in flight."""
+        if self._confirm_poll_unsub is not None:
+            self._confirm_poll_unsub()
+            self._confirm_poll_unsub = None
+        self._confirm_polls_left = 0
 
     async def _create_coordinator(self) -> None:
         """Get the coordinator for a specific device."""
