@@ -53,8 +53,10 @@ from .device_helpers import (
     DEVICE_ICONS,
     WASH_DEVICE_TYPES,
     LGEBaseDevice,
+    entity_adder,
     get_entity_name,
     get_wrapper_device,
+    handle_api_errors,
 )
 from .wideq import (
     SET_TIME_DEVICE_TYPES,
@@ -657,6 +659,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the LGE sensors."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -684,7 +687,7 @@ async def async_setup_entry(
             for lge_device in lge_devices.get(dev_type, [])
         ]
 
-        async_add_entities(lge_sensors + lge_common_sensors)
+        add_entities(lge_sensors + lge_common_sensors)
 
     _async_discover_device(lge_cfg_devices)
 
@@ -837,18 +840,21 @@ class LGESensor(CoordinatorEntity, RestoreEntity, SensorEntity):
 
         return None
 
+    @handle_api_errors
     async def async_remote_start(self, course: str | None = None):
         """Call the remote start command for WM devices."""
         if self._api.type not in WM_DEVICE_TYPES:
             raise NotImplementedError()
         await self._api.device.remote_start(course)
 
+    @handle_api_errors
     async def async_wake_up(self):
         """Call the wakeup command for WM devices."""
         if self._api.type not in WM_DEVICE_TYPES:
             raise NotImplementedError()
         await self._api.device.wake_up()
 
+    @handle_api_errors
     async def async_set_time(self, time_wanted: time | None = None):
         """Call the set time command for Microwave devices."""
         if self._api.type not in SET_TIME_DEVICE_TYPES:

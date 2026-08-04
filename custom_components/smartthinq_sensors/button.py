@@ -19,7 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
-from .device_helpers import LGEBaseDevice
+from .device_helpers import LGEBaseDevice, entity_adder, handle_api_errors
 from .history_stats import async_update_history
 from .wideq import WM_DEVICE_TYPES, DeviceType, WashDeviceFeatures
 
@@ -103,6 +103,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the LGE buttons."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -123,7 +124,7 @@ async def async_setup_entry(
             if _button_exist(lge_device, button_desc)
         ]
 
-        async_add_entities(lge_button)
+        add_entities(lge_button)
 
     _async_discover_device(lge_cfg_devices)
 
@@ -159,6 +160,7 @@ class LGEButton(CoordinatorEntity, ButtonEntity):
             is_avail = self.entity_description.available_fn(self._wrap_device)
         return self._api.available and is_avail
 
+    @handle_api_errors
     async def async_press(self) -> None:
         """Triggers service."""
         await self.entity_description.press_action_fn(self._wrap_device)

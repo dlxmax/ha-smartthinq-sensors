@@ -21,7 +21,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
-from .device_helpers import STATE_LOOKUP, LGEBaseDevice
+from .device_helpers import (
+    STATE_LOOKUP,
+    LGEBaseDevice,
+    entity_adder,
+    handle_api_errors,
+)
 from .wideq import (
     WM_DEVICE_TYPES,
     AirConditionerFeatures,
@@ -209,6 +214,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the LGE switch."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -238,7 +244,7 @@ async def async_setup_entry(
             ]
         )
 
-        async_add_entities(lge_switch)
+        add_entities(lge_switch)
 
     _async_discover_device(lge_cfg_devices)
 
@@ -307,6 +313,7 @@ class LGESwitch(LGEBaseSwitch):
         """Return True when the appliance never reports this control back."""
         return self.entity_description.assumed_state
 
+    @handle_api_errors
     async def async_turn_off(self, **kwargs):
         """Turn the entity off."""
         if self.entity_description.turn_off_fn is None:
@@ -315,6 +322,7 @@ class LGESwitch(LGEBaseSwitch):
             await self.entity_description.turn_off_fn(self._wrap_device)
             self._api.async_set_updated()
 
+    @handle_api_errors
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
         if self.entity_description.turn_on_fn is None:

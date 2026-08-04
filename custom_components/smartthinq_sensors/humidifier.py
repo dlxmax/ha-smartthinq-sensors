@@ -21,6 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import LGEDevice
 from .const import DOMAIN, LGE_DEVICES, LGE_DISCOVERY_NEW
+from .device_helpers import entity_adder, handle_api_errors
 from .wideq import DehumidifierFeatures, DeviceType
 from .wideq.devices.dehumidifier import DeHumidifierDevice
 
@@ -36,6 +37,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up LGE device humidifier based on config_entry."""
+    add_entities = entity_adder(async_add_entities)
     entry_config = hass.data[DOMAIN]
     lge_cfg_devices = entry_config.get(LGE_DEVICES)
 
@@ -54,7 +56,7 @@ async def async_setup_entry(
             for lge_device in lge_devices.get(DeviceType.DEHUMIDIFIER, [])
         ]
 
-        async_add_entities(lge_humidifier)
+        add_entities(lge_humidifier)
 
     _async_discover_device(lge_cfg_devices)
 
@@ -141,6 +143,7 @@ class LGEDeHumidifier(LGEBaseHumidifier):
             return self._api.state.fan_speed
         return self._api.state.operation_mode
 
+    @handle_api_errors
     async def async_set_mode(self, mode: str) -> None:
         """Set new target mode."""
         if not self.available_modes:
@@ -158,6 +161,7 @@ class LGEDeHumidifier(LGEBaseHumidifier):
         """Return the humidity we try to reach."""
         return self._api.state.device_features.get(DehumidifierFeatures.TARGET_HUMIDITY)
 
+    @handle_api_errors
     async def async_set_humidity(self, humidity: int) -> None:
         """Set new target humidity."""
         humidity_step = self._device.target_humidity_step or 1
@@ -165,11 +169,13 @@ class LGEDeHumidifier(LGEBaseHumidifier):
         await self._device.set_target_humidity(target_humidity)
         self._api.async_set_updated()
 
+    @handle_api_errors
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the entity on."""
         await self._device.power(True)
         self._api.async_set_updated()
 
+    @handle_api_errors
     async def async_turn_off(self, **kwargs) -> None:
         """Turn the entity off."""
         await self._device.power(False)
@@ -189,6 +195,7 @@ class LGEDeHumidifier(LGEBaseHumidifier):
             return max_value
         return DEFAULT_MAX_HUMIDITY
 
+    @handle_api_errors
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new fan mode."""
         if fan_mode not in self._device.fan_speeds:
