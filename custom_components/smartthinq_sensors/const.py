@@ -55,6 +55,12 @@ MAX_SCAN_INTERVAL = 3600
 # work_id and costs a single request.
 POST_COMMAND_POLL_INTERVAL = 5
 POST_COMMAND_POLL_COUNT = 5
+# The first read after a command is the expensive one: the appliance holds the
+# session while it applies the change, measured at ~20 s on the FNQ161. Waiting
+# that out costs nothing - the burst still reports well inside a scan interval -
+# and it keeps the confirmation out of the window where someone adjusting a
+# setpoint is most likely to send the next command.
+POST_COMMAND_POLL_FIRST_DELAY = 20
 
 CLIENT = "client"
 LGE_DEVICES = "lge_devices"
