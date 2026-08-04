@@ -423,7 +423,9 @@ class LGEDevice:
         self._coordinator: DataUpdateCoordinator | None = None
         self._disc_count = 0
         self._available = True
-        self._known_features: set[str] = set()
+        # None until setup has finished, so the polls that run during setup do
+        # not report every feature the device has as a late arrival.
+        self._known_features: set[str] | None = None
 
     @property
     def available(self) -> bool:
@@ -605,6 +607,11 @@ class LGEDevice:
         up what is now known. Entities that already exist are filtered out by
         their unique_id, so this is a no-op once the device has settled.
         """
+        if self._known_features is None:
+            # Still inside init_device: no platform is listening yet, and the
+            # features found here are the baseline rather than late arrivals.
+            return
+
         _ = self._state.device_features
         features = set(self._device.available_features)
         if not (new_features := features - self._known_features):
