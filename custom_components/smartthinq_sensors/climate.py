@@ -328,8 +328,14 @@ class LGEACClimate(LGEClimate):
                 raise ValueError(f"Invalid preset_mode [{preset_mode}]")
             if not self._api.state.is_on and preset_mode != PRESET_NONE:
                 await self._device.power(True)
-            # Only one synthesised preset may be active at a time.
-            for name, (_feature, setter) in extra.items():
+            # Only one synthesised preset may be active at a time. Turning the
+            # others off is skipped when they already read as off, so selecting
+            # a preset does not fire a command at every unrelated toggle. The
+            # requested preset is always written, never suppressed by state.
+            features = self._api.state.device_features
+            for name, (feature, setter) in extra.items():
+                if name != preset_mode and not features.get(feature):
+                    continue
                 await setter(name == preset_mode)
             self._api.async_set_updated()
             return
