@@ -236,13 +236,6 @@ class LGEACClimate(LGEClimate):
         self._hvac_mode_lookup: dict[str, HVACMode] | None = None
         self._preset_mode_lookup: dict[str, str] | None = None
 
-        # The appliance keeps a separate target temperature per operation mode,
-        # but THINQ1 only ever reports one TempCfg, so the recalled value cannot
-        # be read back. Mirror the appliance's memory here and re-assert it on a
-        # mode change, otherwise HA displays a setpoint the compressor is not
-        # using. Same for the synthesised presets, which the unit drops on a
-        # mode change while the cloud keeps echoing the old value.
-        self._mode_target_temp: dict[HVACMode, float] = {}
 
     def _available_hvac_modes(self) -> dict[str, HVACMode]:
         """Return available hvac modes from lookup dict."""
@@ -331,13 +324,6 @@ class LGEACClimate(LGEClimate):
         if (operation_mode := reverse_lookup.get(hvac_mode)) is None:
             raise ValueError(f"Invalid hvac_mode [{hvac_mode}]")
 
-        # Remember where the mode we are leaving was set, so returning to it
-        # restores the same setpoint the appliance itself would recall.
-        prev_mode = self.hvac_mode
-        if prev_mode not in (HVACMode.OFF, hvac_mode):
-            if (prev_temp := self._api.state.target_temp) is not None:
-                self._mode_target_temp[prev_mode] = prev_temp
-
         # A preset only survives the switch if it is valid in the new mode. One
         # that is not (BOOST outside cool) is cleared explicitly, or the cloud
         # would keep echoing it back after the appliance has dropped it.
@@ -355,10 +341,9 @@ class LGEACClimate(LGEClimate):
         if operation_mode != HVAC_MODE_NONE:
             await self._device.set_op_mode(operation_mode)
 
-        # Re-assert both, because the cloud echoes stale values for each and the
-        # appliance does not carry them across a mode change.
-        if (new_temp := self._mode_target_temp.get(hvac_mode)) is not None:
-            await self._device.set_target_temp(new_temp)
+        # The appliance recalls its own setpoint for the mode we just switched
+        # into, so do not re-assert one here. The preset it does drop, while the
+        # cloud keeps echoing the old value, so that still needs saying.
         if drop_preset is not None:
             await extra[drop_preset][1](False)
         if keep_preset is not None:
@@ -499,9 +484,6 @@ class LGEACClimate(LGEClimate):
 
         if (new_temp := kwargs.get(ATTR_TEMPERATURE)) is not None:
             await self._device.set_target_temp(new_temp)
-            # Mirror the appliance's per-mode setpoint memory (see __init__).
-            if (curr_mode := self.hvac_mode) != HVACMode.OFF:
-                self._mode_target_temp[curr_mode] = new_temp
             self._api.async_set_updated()
 
     @property
