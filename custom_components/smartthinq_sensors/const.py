@@ -55,12 +55,16 @@ MAX_SCAN_INTERVAL = 3600
 # work_id and costs a single request.
 POST_COMMAND_POLL_INTERVAL = 5
 POST_COMMAND_POLL_COUNT = 5
-# The first read after a command is the expensive one: the appliance holds the
-# session while it applies the change, measured at ~20 s on the FNQ161. Waiting
-# that out costs nothing - the burst still reports well inside a scan interval -
-# and it keeps the confirmation out of the window where someone adjusting a
-# setpoint is most likely to send the next command.
-POST_COMMAND_POLL_FIRST_DELAY = 20
+# First poll after a command. The app fires its first setMonitoringInterval poll
+# at one interval (5 s), so match it: a mode change recalls the appliance's own
+# per-mode setpoint and fan speed, and at 5 s that shows up in the UI in seconds
+# instead of the ~20-40 s an earlier 20 s delay cost. A poll cannot collide with
+# the next command - the confirm poll skips while session_busy and set_control
+# holds _session_lock - so the longer gap that guarded against that is not
+# needed. The poll that lands before the appliance has settled just reads the
+# pre-command value; a later poll in the same burst corrects it (the app shows
+# the same brief flicker), so no suppression is wanted.
+POST_COMMAND_POLL_FIRST_DELAY = 5
 
 CLIENT = "client"
 LGE_DEVICES = "lge_devices"
