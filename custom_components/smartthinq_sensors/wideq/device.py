@@ -58,6 +58,17 @@ MAX_RETRIES = 3
 MAX_UPDATE_FAIL_ALLOWED = 10
 MAX_INVALID_CREDENTIAL_ERR = 3
 SLEEP_BETWEEN_RETRIES = 2  # seconds
+# Maximum age of a V1 (THINQ1) monitoring session (work_id) before it is
+# recycled. LG's monitor_poll keeps returning HTTP 200 with the LAST captured
+# frame once the session goes stale, so values freeze indefinitely (observed:
+# InOutInstantPower stuck for hours) - and the empty/error recovery in _poll_v1
+# never fires because the response is non-empty. Minting a fresh work_id forces
+# the appliance to stream live data again. At the default 300 s cadence this
+# recycles the session every poll (capping any freeze to one cycle); faster
+# pollers keep the cached session across intra-window polls. A stop+start is two
+# LG requests, so keep this at/above the poll interval to stay well clear of the
+# rate-limit ban.
+WORK_ID_MAX_AGE = 250  # seconds
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +95,7 @@ class Monitor:
         self._platform_type = device_info.platform_type
         self._device_descr = device_info.name
         self._work_id: str | None = None
+        self._work_id_time: datetime | None = None
         self._has_error = False
         self._invalid_credential_count = 0
         self._error_log_count = 0
@@ -293,9 +305,17 @@ class Monitor:
         """Start monitor for ThinQ1 device."""
         if self._platform_type != PlatformType.THINQ1:
             return
+        # Recycle a session that has outlived WORK_ID_MAX_AGE: LG keeps serving
+        # the last frame from a stale work_id (HTTP 200, non-empty) so values
+        # freeze forever otherwise - a fresh work_id resumes live data.
+        if self._work_id and self._work_id_time is not None:
+            age = (datetime.now(timezone.utc) - self._work_id_time).total_seconds()
+            if age >= WORK_ID_MAX_AGE:
+                await self.stop()
         if self._work_id:
             return
         self._work_id = await self._client.session.monitor_start(self._device_id)
+        self._work_id_time = datetime.now(timezone.utc)
 
     async def stop(self) -> None:
         """Stop monitor for ThinQ1 device."""
@@ -303,6 +323,7 @@ class Monitor:
             return
         work_id = self._work_id
         self._work_id = None
+        self._work_id_time = None
         await self._client.session.monitor_stop(self._device_id, work_id)
 
     async def poll(self, query_device=False) -> tuple[Any | None, bool]:
