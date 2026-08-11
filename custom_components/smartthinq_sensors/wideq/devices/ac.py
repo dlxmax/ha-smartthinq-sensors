@@ -158,6 +158,12 @@ TEMP_STEP_HALF = 0.5
 
 ADD_FEAT_POLL_INTERVAL = 300  # 5 minutes
 
+# Highest power, in watts, we treat as the idle reading of a unit that is off.
+# It has to clear the floor of every model, and stay well under what a
+# compressor draws, so that a unit sharing its outdoor unit with a second
+# indoor unit still reports that unit's consumption while it is itself off.
+STANDBY_POWER_MAX = 100
+
 LIGHT_DISPLAY_OFF = ["@RAC_LED_OFF", "@AC_LED_OFF_W", "@OFF"]
 LIGHT_DISPLAY_ON = ["@RAC_LED_ON", "@AC_LED_ON_W", "@ON"]
 LIGHT_DISPLAY_INV_OFF = ["@RAC_LED_ON", "@AC_LED_OFF_W", "@ON"]
@@ -1247,9 +1253,13 @@ class AirConditionerStatus(DeviceStatus):
         key = self._get_state_key(STATE_POWER)
         if (value := self.to_int_or_none(self._data.get(key))) is None:
             return None
-        if value <= 50 and not self.is_on:
-            # decrease power for devices that always return 50 when standby
-            value = 5
+        if value <= STANDBY_POWER_MAX and not self.is_on:
+            # A unit that is off reports a small non-zero floor rather than 0,
+            # and how small differs per model, so treat everything up to the
+            # standby limit as off. Anything above it is left alone: a unit
+            # sharing its outdoor unit with a second indoor unit reports that
+            # unit's consumption while it is itself off, and that is real.
+            value = 0
         return self._update_feature(AirConditionerFeatures.ENERGY_CURRENT, value, False)
 
     @property

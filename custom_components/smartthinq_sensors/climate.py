@@ -272,6 +272,11 @@ class LGEACClimate(LGEClimate):
     def supported_features(self) -> ClimateEntityFeature:
         """Return the list of supported features."""
         features = DEFAULT_AC_FEATURES
+        if self.hvac_mode == HVACMode.FAN_ONLY:
+            # Fan-only just moves air, so there is nothing to reach. The unit
+            # keeps reporting the setpoint it last cooled to, which reads as a
+            # live target it is not acting on.
+            features &= ~ClimateEntityFeature.TARGET_TEMPERATURE
         if len(self.fan_modes) > 0:
             features |= ClimateEntityFeature.FAN_MODE
         if self.preset_modes:
@@ -470,8 +475,10 @@ class LGEACClimate(LGEClimate):
         return self._api.state.device_features.get(AirConditionerFeatures.HUMIDITY)
 
     @property
-    def target_temperature(self) -> float:
+    def target_temperature(self) -> float | None:
         """Return the temperature we try to reach."""
+        if self.hvac_mode == HVACMode.FAN_ONLY:
+            return None
         return self._api.state.target_temp
 
     @handle_api_errors
