@@ -598,18 +598,22 @@ class LGEDevice:
 
     @callback
     def _async_schedule_retry_poll(self):
-        """Retry soon after a poll that failed, instead of after a whole interval.
+        """Retry a failed poll in a minute, instead of after a whole interval.
 
         The aircon's wifi module leaves the network for ~30 s at a time on its
         own. At a 300 s scan interval a poll unlucky enough to land in one of
         those windows costs five minutes of stale readings, which matters most
-        for instant power. Retrying on a short interval covers the outage.
+        for instant power.
 
-        The allowance is spent per failure and only restored by a poll that
-        succeeds, so an appliance that is off or unplugged falls back to the
-        normal cadence rather than retrying forever. Only one retry is armed at
-        a time; each failed retry runs through this method again and so chains
-        the next one, until the allowance runs out or a poll succeeds.
+        A retry is still a request to LG, so this stays inside the 5 min
+        cadence the ban risk is judged against: the refresh below re-arms the
+        coordinator's interval timer, so the next scheduled poll moves to a full
+        interval after the retry rather than landing on top of it. The allowance
+        is spent per failure and restored only by a poll that succeeds, so an
+        appliance that is off or unplugged falls back to the normal cadence
+        rather than retrying forever. Only one retry is armed at a time; each
+        failed retry runs through this method again and so chains the next one,
+        until the allowance runs out or a poll succeeds.
         """
         if self._coordinator is None or self._retry_polls_left <= 0:
             return

@@ -883,9 +883,15 @@ class Device:
         the expensive ones. Only a call that actually returned data may spend
         that budget: if the appliance drops off wifi mid-poll the read raises,
         and charging the failure to the timer would leave power stale for a
-        whole interval over an outage that lasted seconds. So the timestamp
-        moves on success only, and the failure is recorded so the caller can
+        whole interval over an outage that lasted seconds. So a failed call
+        rolls the timestamp back, and records the failure so the caller can
         retry sooner than the normal scan interval.
+
+        Both outcomes log at INFO. For the AC this call is the only carrier of
+        InOutInstantPower, and on failure `_current_power` keeps its old value:
+        the sensor lies rather than going unavailable, so the reason has to be
+        readable without turning on debug. A silent skip and a silent failure
+        otherwise produce an identical, unexplained flat line.
         """
         if poll_interval <= 0:
             return
@@ -895,23 +901,41 @@ class Device:
         else:
             difference = (call_time - self._last_additional_poll).total_seconds()
         if difference < poll_interval:
+            _LOGGER.info(
+                "%s: additional poll SKIPPED - only %.1fs since last, interval is"
+                " %ds. Wattage NOT refreshed this cycle (previous value reused)",
+                self._attr_name,
+                difference,
+                poll_interval,
+            )
             return
+
+        # Stamp before the call and roll back on failure, rather than stamping
+        # after it. A device info method may deliberately clear the stamp to ask
+        # for an immediate fetch next cycle (the AC does this when it skipped
+        # the read because the unit is off); stamping afterwards would overwrite
+        # that request, and the rollback keeps a failure from spending the
+        # interval either way.
+        prev_stamp = self._last_additional_poll
+        self._last_additional_poll = call_time
         try:
             if self._should_poll:
                 await self._get_device_info()
             else:
                 await self._get_device_info_v2()
         except Exception as exc:  # pylint: disable=broad-except
+            self._last_additional_poll = prev_stamp
             self._additional_poll_failed = True
             _LOGGER.info(
-                "Device %s: additional poll failed, will retry before the next"
-                " scheduled one: %s",
-                self.name,
+                "%s: additional poll %s FAILED - not refreshed, previous value"
+                " reused until the retry. %s: %s",
+                self._attr_name,
+                "V1" if self._should_poll else "V2",
+                type(exc).__name__,
                 exc,
             )
             return
         self._additional_poll_failed = False
-        self._last_additional_poll = call_time
 
     def _load_emul_v1_payload(self):
         """

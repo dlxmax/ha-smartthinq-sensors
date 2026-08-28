@@ -936,18 +936,24 @@ class AirConditionerDevice(Device):
                 self._current_power_ever_read
                 or self._current_power_failures < MAX_POWER_READ_FAILURES
             ):
-                _LOGGER.info(
-                    "Device %s: instant power read failed (%d consecutive), will"
-                    " retry: %s",
+                # Raise so the additional poll is not charged as done: it logs
+                # the failure and the caller retries before the next scheduled
+                # read.
+                _LOGGER.debug(
+                    "Device %s: instant power read failed (%d consecutive): %s",
                     self.name,
                     self._current_power_failures,
                     exc,
                 )
-                # Raise so the additional poll is not charged as done: the
-                # caller retries this read before the next scheduled one.
                 raise
             # Never answered, and consistently refused: not supported.
-            _LOGGER.debug("Error calling get_power methods: %s", exc)
+            _LOGGER.warning(
+                "Device %s: instant power refused %d times and never read;"
+                " treating it as unsupported until reload. %s",
+                self.name,
+                self._current_power_failures,
+                exc,
+            )
             self._current_power_supported = False
             return None
         self._current_power_failures = 0
@@ -1040,6 +1046,41 @@ class AirConditionerDevice(Device):
         Call additional method to get device information for API v1.
         Called by 'device_poll' method using a lower poll rate.
         """
+        # An AC that is off draws nothing, and energy_current already reports 0
+        # whenever is_on is False - so the two extra LG calls this makes every
+        # 5 min while the unit is off buy nothing. Skip them and keep the API
+        # budget for when the compressor is actually running.
+        #
+        # self._status here is the PREVIOUS cycle's status (poll() rebuilds it
+        # only after _device_poll returns), so clearing _last_additional_poll is
+        # what removes the turn-on lag: it makes _additional_poll treat the next
+        # call as a first call and fetch power immediately instead of 5 min
+        # later. _additional_poll reads the stamp back and leaves a clear alone.
+        #
+        # Only trust is_on when the previous status actually carries polled
+        # data. reset_status() installs an EMPTY AirConditionerStatus
+        # (_data == {}) at setup and after every disconnect / ThinQ-unavailable
+        # recovery, and an empty status reports is_on False. That made this
+        # shortcut latch _current_power = 0 while the unit was RUNNING, and the
+        # 0 then sat in the power sensor - and in the 20 min average a consumer
+        # takes from it - until the next successful additional poll. Low is the
+        # dangerous direction. If _data is empty, do not trust it: fall through
+        # and pay for the two real calls once. The fail-safe direction is a real
+        # fetch, never a fake zero.
+        prev_status = self._status
+        if (
+            prev_status is not None
+            and getattr(prev_status, "_data", None)
+            and not prev_status.is_on
+        ):
+            self._current_power = 0
+            self._last_additional_poll = None
+            _LOGGER.info(
+                "%s: unit is off - skipping wattage/filter poll (reports 0 W)",
+                self.name,
+            )
+            return
+
         # this commands is to get power usage and filter status on V1 device
         if not self.is_air_to_water:
             self._current_power = await self.get_power()

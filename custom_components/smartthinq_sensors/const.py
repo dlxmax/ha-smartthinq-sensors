@@ -69,16 +69,25 @@ POST_COMMAND_POLL_FIRST_DELAY = 5
 # The LG PAC wifi module drops off the network for ~30 s at a time, on its own,
 # several times an hour (see the AirPort investigation: it is the module, not
 # the AP, and there is no fix on the network side). A poll that lands in one of
-# those windows fails, and at a 300 s scan interval that costs five minutes of
+# those windows fails, and at a 300 s scan interval that cost five minutes of
 # stale instant power - which is the input the aircon miser regulates on.
-# So retry a failed poll on a short interval instead of waiting out the scan
-# interval. A failed attempt never advances the additional-poll clock, so these
-# retries do not spend the 300 s power-read budget; only a read that returned
-# data does. Retries are bounded, and the allowance is only restored by a poll
-# that succeeds, so an appliance that is simply off or unplugged settles back to
-# the normal cadence instead of retrying forever.
-FAILED_POLL_RETRY_INTERVAL = 30
-FAILED_POLL_RETRY_COUNT = 4
+#
+# So retry a failed poll, but keep the long-run request rate at the 5 min
+# cadence the ban risk is judged against. Three things hold that line:
+#  - a retry is a full coordinator refresh, and DataUpdateCoordinator re-arms
+#    its interval timer at the end of every refresh, so the next scheduled poll
+#    moves to 5 min after the retry. Retries displace the schedule rather than
+#    adding to it.
+#  - a failed attempt never advances the additional-poll clock, so retries do
+#    not spend the 300 s power-read budget; only a read that returned data does.
+#  - the allowance is bounded and is restored only by a poll that succeeds, so
+#    an appliance that is off or unplugged settles back to the normal cadence
+#    instead of retrying forever.
+# A retry still costs a request, so the interval is a minute rather than
+# seconds: it covers the ~30 s dropouts while the worst case stays 3 extra
+# requests in 3 minutes, once, before the cadence resumes.
+FAILED_POLL_RETRY_INTERVAL = 60
+FAILED_POLL_RETRY_COUNT = 3
 
 CLIENT = "client"
 LGE_DEVICES = "lge_devices"
