@@ -40,6 +40,8 @@ from .const import (
     CONF_USE_HA_SESSION,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FAILED_POLL_RETRY_COUNT,
+    FAILED_POLL_RETRY_INTERVAL,
     LGE_DEVICES,
     LGE_DISCOVERY_NEW,
     MIN_HA_MAJ_VER,
@@ -397,6 +399,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for devices in data.get(LGE_DEVICES, {}).values():
                 for lge_device in devices:
                     lge_device.cancel_confirm_polls()
+                    lge_device.cancel_retry_polls()
                     await lge_device.device.release_control_permission()
             await client.close()
     return unload_ok
@@ -434,6 +437,9 @@ class LGEDevice:
         self._confirm_poll_unsub: Callable[[], None] | None = None
         self._confirm_polls_left = 0
         self._confirm_poll_gen = 0
+        self._retry_poll_unsub: Callable[[], None] | None = None
+        self._retry_polls_left = FAILED_POLL_RETRY_COUNT
+        self._retry_poll_gen = 0
 
     @property
     def available(self) -> bool:
@@ -590,6 +596,57 @@ class LGEDevice:
             self._confirm_poll_unsub = None
         self._confirm_polls_left = 0
 
+    @callback
+    def _async_schedule_retry_poll(self):
+        """Retry soon after a poll that failed, instead of after a whole interval.
+
+        The aircon's wifi module leaves the network for ~30 s at a time on its
+        own. At a 300 s scan interval a poll unlucky enough to land in one of
+        those windows costs five minutes of stale readings, which matters most
+        for instant power. Retrying on a short interval covers the outage.
+
+        The allowance is spent per failure and only restored by a poll that
+        succeeds, so an appliance that is off or unplugged falls back to the
+        normal cadence rather than retrying forever. Only one retry is armed at
+        a time; each failed retry runs through this method again and so chains
+        the next one, until the allowance runs out or a poll succeeds.
+        """
+        if self._coordinator is None or self._retry_polls_left <= 0:
+            return
+        if self._retry_poll_unsub is not None:
+            return
+
+        self._retry_polls_left -= 1
+        generation = self._retry_poll_gen
+
+        async def _retry_poll(_now) -> None:
+            if generation != self._retry_poll_gen:
+                return
+            self._retry_poll_unsub = None
+            if self._device.session_busy:
+                # A command or another poll holds the appliance, and that work
+                # publishes a fresh state of its own. Wait rather than queue
+                # behind it, and do not spend the allowance on the wait.
+                self._retry_poll_unsub = async_call_later(
+                    self._hass, FAILED_POLL_RETRY_INTERVAL, _retry_poll
+                )
+                return
+            # async_refresh, not async_request_refresh: the debouncer would
+            # swallow a retry that lands close to a scheduled poll.
+            await self._coordinator.async_refresh()
+
+        self._retry_poll_unsub = async_call_later(
+            self._hass, FAILED_POLL_RETRY_INTERVAL, _retry_poll
+        )
+
+    @callback
+    def cancel_retry_polls(self):
+        """Stop any pending retry poll."""
+        self._retry_poll_gen += 1
+        if self._retry_poll_unsub is not None:
+            self._retry_poll_unsub()
+            self._retry_poll_unsub = None
+
     async def _create_coordinator(self) -> None:
         """Get the coordinator for a specific device."""
         interval = self._hass.data.get(DOMAIN, {}).get(
@@ -663,6 +720,16 @@ class LGEDevice:
             self._disc_count = 0
             self._state = state
             self._async_discover_late_features()
+
+        # A poll that came back empty, or one whose additional read (instant
+        # power on a V1 AC) raised, leaves the state we publish stale. Retry
+        # before the next scheduled poll rather than carrying that value for a
+        # whole scan interval.
+        if state and not self._device.additional_poll_failed:
+            self.cancel_retry_polls()
+            self._retry_polls_left = FAILED_POLL_RETRY_COUNT
+        else:
+            self._async_schedule_retry_poll()
 
     @callback
     def _async_discover_late_features(self) -> None:

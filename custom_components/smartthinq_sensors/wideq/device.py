@@ -453,6 +453,7 @@ class Device:
         self._control_set = 0
         self._control_set_time: datetime | None = None
         self._last_additional_poll: datetime | None = None
+        self._additional_poll_failed = False
         self._available_features = {}
         # A V1 appliance answers one caller at a time. Overlap a status poll
         # with a command and the command comes back "제품 응답 지연", so the two
@@ -479,6 +480,11 @@ class Device:
     def device_info(self) -> DeviceInfo:
         """Return 'device_info' for this device."""
         return self._device_info
+
+    @property
+    def additional_poll_failed(self) -> bool:
+        """Return True if the last additional poll raised instead of returning."""
+        return self._additional_poll_failed
 
     @property
     def session_busy(self) -> bool:
@@ -870,7 +876,17 @@ class Device:
         return await self._mon.refresh(query_device)
 
     async def _additional_poll(self, poll_interval: int):
-        """Perform dedicated additional device poll with a slower rate."""
+        """Perform dedicated additional device poll with a slower rate.
+
+        The additional poll is what reads instant power on a V1 AC, and it is
+        rate limited to one call per `poll_interval` because those reads are
+        the expensive ones. Only a call that actually returned data may spend
+        that budget: if the appliance drops off wifi mid-poll the read raises,
+        and charging the failure to the timer would leave power stale for a
+        whole interval over an outage that lasted seconds. So the timestamp
+        moves on success only, and the failure is recorded so the caller can
+        retry sooner than the normal scan interval.
+        """
         if poll_interval <= 0:
             return
         call_time = datetime.now(timezone.utc)
@@ -880,17 +896,22 @@ class Device:
             difference = (call_time - self._last_additional_poll).total_seconds()
         if difference < poll_interval:
             return
-        self._last_additional_poll = call_time
-        if self._should_poll:
-            try:
+        try:
+            if self._should_poll:
                 await self._get_device_info()
-            except Exception as exc:  # pylint: disable=broad-except
-                _LOGGER.debug("Error calling additional poll V1 methods: %s", exc)
-        else:
-            try:
+            else:
                 await self._get_device_info_v2()
-            except Exception as exc:  # pylint: disable=broad-except
-                _LOGGER.debug("Error calling additional poll V2 methods: %s", exc)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._additional_poll_failed = True
+            _LOGGER.info(
+                "Device %s: additional poll failed, will retry before the next"
+                " scheduled one: %s",
+                self.name,
+                exc,
+            )
+            return
+        self._additional_poll_failed = False
+        self._last_additional_poll = call_time
 
     def _load_emul_v1_payload(self):
         """

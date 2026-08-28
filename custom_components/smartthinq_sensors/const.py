@@ -66,6 +66,20 @@ POST_COMMAND_POLL_COUNT = 5
 # the same brief flicker), so no suppression is wanted.
 POST_COMMAND_POLL_FIRST_DELAY = 5
 
+# The LG PAC wifi module drops off the network for ~30 s at a time, on its own,
+# several times an hour (see the AirPort investigation: it is the module, not
+# the AP, and there is no fix on the network side). A poll that lands in one of
+# those windows fails, and at a 300 s scan interval that costs five minutes of
+# stale instant power - which is the input the aircon miser regulates on.
+# So retry a failed poll on a short interval instead of waiting out the scan
+# interval. A failed attempt never advances the additional-poll clock, so these
+# retries do not spend the 300 s power-read budget; only a read that returned
+# data does. Retries are bounded, and the allowance is only restored by a poll
+# that succeeds, so an appliance that is simply off or unplugged settles back to
+# the normal cadence instead of retrying forever.
+FAILED_POLL_RETRY_INTERVAL = 30
+FAILED_POLL_RETRY_COUNT = 4
+
 CLIENT = "client"
 LGE_DEVICES = "lge_devices"
 

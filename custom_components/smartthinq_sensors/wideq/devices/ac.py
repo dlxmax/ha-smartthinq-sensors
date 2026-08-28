@@ -157,6 +157,10 @@ TEMP_STEP_WHOLE = 1.0
 TEMP_STEP_HALF = 0.5
 
 ADD_FEAT_POLL_INTERVAL = 300  # 5 minutes
+# Consecutive refused instant power reads, before the appliance has ever
+# answered one, after which the reading is treated as unsupported.
+# See AirConditionerDevice.get_power.
+MAX_POWER_READ_FAILURES = 3
 
 LIGHT_DISPLAY_OFF = ["@RAC_LED_OFF", "@AC_LED_OFF_W", "@OFF"]
 LIGHT_DISPLAY_ON = ["@RAC_LED_ON", "@AC_LED_ON_W", "@ON"]
@@ -313,6 +317,8 @@ class AirConditionerDevice(Device):
 
         self._current_power = None
         self._current_power_supported = True
+        self._current_power_failures = 0
+        self._current_power_ever_read = False
 
         self._filter_status = None
         self._filter_status_supported = True
@@ -903,18 +909,51 @@ class AirConditionerDevice(Device):
         await self.set(keys[0], keys[1], key=keys[2], value=conv_temp)
 
     async def get_power(self):
-        """Get the instant power usage in watts of the whole unit."""
+        """Get the instant power usage in watts of the whole unit.
+
+        A failure here is not proof that the appliance lacks the reading. The
+        wifi module drops off the network for seconds at a time, and the cloud
+        answers for an appliance it cannot reach with the same InvalidRequestError
+        (returnCd 9000) it uses for a genuinely unsupported command. Latching
+        the feature off on the first failure therefore ended instant power for
+        the rest of the run over a momentary dropout, silently and with only a
+        debug line - and instant power is what the miser regulates on.
+
+        An appliance that has answered this read once supports it, so from then
+        on a failure can only be transient: raise, and let the caller retry.
+        Before that first answer there is nothing to distinguish a dropout from
+        an unsupported command, so allow a few tries and then give up - a device
+        that really lacks the reading fails every time and stops being asked
+        within the first minutes.
+        """
         if not self._current_power_supported:
             return None
         try:
             value = await self._get_config(STATE_POWER_V1)
-            _LOGGER.debug("Device %s instant power: %s W", self.name, value)
-            return value[STATE_POWER_V1]
         except (ValueError, InvalidRequestError) as exc:
-            # Device does not support whole unit instant power usage
+            self._current_power_failures += 1
+            if (
+                self._current_power_ever_read
+                or self._current_power_failures < MAX_POWER_READ_FAILURES
+            ):
+                _LOGGER.info(
+                    "Device %s: instant power read failed (%d consecutive), will"
+                    " retry: %s",
+                    self.name,
+                    self._current_power_failures,
+                    exc,
+                )
+                # Raise so the additional poll is not charged as done: the
+                # caller retries this read before the next scheduled one.
+                raise
+            # Never answered, and consistently refused: not supported.
             _LOGGER.debug("Error calling get_power methods: %s", exc)
             self._current_power_supported = False
             return None
+        self._current_power_failures = 0
+        self._current_power_ever_read = True
+        _LOGGER.debug("Device %s instant power: %s W", self.name, value)
+        return value[STATE_POWER_V1]
 
     async def get_filter_state(self):
         """Get information about the filter."""
